@@ -23,40 +23,39 @@ package org.kde.kdeconnect.Plugins.SharePlugin;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
+import androidx.preference.PreferenceManager;
 
 import org.kde.kdeconnect.Device;
 import org.kde.kdeconnect.Helpers.NotificationHelper;
 import org.kde.kdeconnect_tp.R;
-
-import androidx.core.app.NotificationCompat;
-import androidx.preference.PreferenceManager;
 
 class UploadNotification {
     private final NotificationManager notificationManager;
     private NotificationCompat.Builder builder;
     private final int notificationId;
     private final Device device;
-    private long currentJobId;
+    private long jobId;
 
-    UploadNotification(Device device) {
+    UploadNotification(Device device, long jobId) {
         this.device = device;
+        this.jobId = jobId;
 
         notificationId = (int) System.currentTimeMillis();
-        notificationManager = (NotificationManager) device.getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager = ContextCompat.getSystemService(device.getContext(), NotificationManager.class);
         builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.FILETRANSFER)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setAutoCancel(true)
                 .setOngoing(true)
                 .setProgress(100, 0, true);
+        addCancelAction();
     }
 
-    void addCancelAction(long jobId) {
-        builder.mActions.clear();
-
-        currentJobId = jobId;
+    void addCancelAction() {
         Intent cancelIntent = new Intent(device.getContext(), ShareBroadcastReceiver.class);
         cancelIntent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         cancelIntent.setAction(SharePlugin.ACTION_CANCEL_SHARE);
@@ -64,7 +63,7 @@ class UploadNotification {
         cancelIntent.putExtra(SharePlugin.CANCEL_SHARE_DEVICE_ID_EXTRA, device.getDeviceId());
         PendingIntent cancelPendingIntent = PendingIntent.getBroadcast(device.getContext(), 0, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
-        builder.addAction(R.drawable.ic_reject_pairing, device.getContext().getString(R.string.cancel), cancelPendingIntent);
+        builder.addAction(R.drawable.ic_reject_pairing_24dp, device.getContext().getString(R.string.cancel), cancelPendingIntent);
     }
 
     public void setTitle(String title) {
@@ -79,7 +78,7 @@ class UploadNotification {
     }
 
     public void setFinished(String message) {
-        builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.DEFAULT);
+        builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.FILETRANSFER);
         builder.setContentTitle(message)
                 .setTicker(message)
                 .setSmallIcon(android.R.drawable.stat_sys_upload_done)

@@ -28,6 +28,8 @@ import android.os.Handler;
 import android.os.Message;
 import android.util.Log;
 
+import androidx.core.content.ContextCompat;
+
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
 import org.kde.kdeconnect.Plugins.PluginFactory;
@@ -40,8 +42,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-
-import androidx.core.content.ContextCompat;
+import java.util.concurrent.ConcurrentHashMap;
 
 @PluginFactory.LoadablePlugin
 public class MprisPlugin extends Plugin {
@@ -53,6 +54,7 @@ public class MprisPlugin extends Plugin {
         private String artist = "";
         private String album = "";
         private String albumArtUrl = "";
+        private String url = "";
         private int volume = 50;
         private long length = -1;
         private long lastPosition = 0;
@@ -87,7 +89,7 @@ public class MprisPlugin extends Plugin {
             return player;
         }
 
-        private boolean isSpotify() {
+        boolean isSpotify() {
             return getPlayer().toLowerCase().equals("spotify");
         }
 
@@ -134,6 +136,11 @@ public class MprisPlugin extends Plugin {
          */
         public Bitmap getAlbumArt() {
             return AlbumArtCache.getAlbumArt(albumArtUrl, MprisPlugin.this, player);
+        }
+
+        //@NonNull
+        public String getUrl() {
+            return url;
         }
 
         public boolean isSetVolumeAllowed() {
@@ -207,10 +214,9 @@ public class MprisPlugin extends Plugin {
     private final static String PACKET_TYPE_MPRIS = "kdeconnect.mpris";
     private final static String PACKET_TYPE_MPRIS_REQUEST = "kdeconnect.mpris.request";
 
-    private final HashMap<String, MprisPlayer> players = new HashMap<>();
+    private final ConcurrentHashMap<String, MprisPlayer> players = new ConcurrentHashMap<>();
     private boolean supportAlbumArtPayload = false;
     private final HashMap<String, Handler> playerStatusUpdated = new HashMap<>();
-
     private final HashMap<String, Handler> playerListUpdated = new HashMap<>();
 
     @Override
@@ -225,7 +231,7 @@ public class MprisPlugin extends Plugin {
 
     @Override
     public Drawable getIcon() {
-        return ContextCompat.getDrawable(context, R.drawable.mpris_plugin_action);
+        return ContextCompat.getDrawable(context, R.drawable.mpris_plugin_action_24dp);
     }
 
     @Override
@@ -282,6 +288,7 @@ public class MprisPlugin extends Plugin {
                 playerStatus.title = np.getString("title", playerStatus.title);
                 playerStatus.artist = np.getString("artist", playerStatus.artist);
                 playerStatus.album = np.getString("album", playerStatus.album);
+                playerStatus.url = np.getString("url", playerStatus.url);
                 playerStatus.volume = np.getInt("volume", playerStatus.volume);
                 playerStatus.length = np.getLong("length", playerStatus.length);
                 if (np.has("pos")) {
@@ -335,14 +342,8 @@ public class MprisPlugin extends Plugin {
             Iterator<HashMap.Entry<String, MprisPlayer>> iter = players.entrySet().iterator();
             while (iter.hasNext()) {
                 String oldPlayer = iter.next().getKey();
-
-                boolean found = false;
-                for (String newPlayer : newPlayerList) {
-                    if (newPlayer.equals(oldPlayer)) {
-                        found = true;
-                        break;
-                    }
-                }
+                final boolean found = newPlayerList.stream().anyMatch(newPlayer ->
+                        newPlayer.equals(oldPlayer));
 
                 if (!found) {
                     iter.remove();
@@ -401,6 +402,9 @@ public class MprisPlugin extends Plugin {
     }
 
     public MprisPlayer getPlayerStatus(String player) {
+        if (player == null) {
+            return null;
+        }
         return players.get(player);
     }
 
@@ -414,12 +418,14 @@ public class MprisPlugin extends Plugin {
      * @return null if no players are playing, a playing player otherwise
      */
     public MprisPlayer getPlayingPlayer() {
-        for (MprisPlayer player : players.values()) {
-            if (player.isPlaying()) {
-                return player;
-            }
+        return players.values().stream().filter(MprisPlayer::isPlaying).findFirst().orElse(null);
+    }
+
+    boolean hasPlayer(MprisPlayer player) {
+        if (player == null) {
+            return false;
         }
-        return null;
+        return players.containsValue(player);
     }
 
     private void requestPlayerList() {
@@ -454,14 +460,7 @@ public class MprisPlugin extends Plugin {
     }
 
     public void fetchedAlbumArt(String url) {
-        boolean doEmitUpdate = false;
-        for (MprisPlayer player : players.values()) {
-            if (url.equals(player.albumArtUrl)) {
-                doEmitUpdate = true;
-            }
-        }
-
-        if (doEmitUpdate) {
+        if (players.values().stream().anyMatch(player -> url.equals(player.albumArtUrl))) {
             for (String key : playerStatusUpdated.keySet()) {
                 try {
                     playerStatusUpdated.get(key).dispatchMessage(new Message());

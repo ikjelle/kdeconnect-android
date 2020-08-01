@@ -20,7 +20,10 @@
 
 package org.kde.kdeconnect.Plugins.PresenterPlugin;
 
-import android.content.Context;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
@@ -29,33 +32,83 @@ import android.support.v4.media.session.PlaybackStateCompat;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
+import android.view.MotionEvent;
+import android.view.View;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+import androidx.media.VolumeProviderCompat;
 
 import org.kde.kdeconnect.BackgroundService;
 import org.kde.kdeconnect.UserInterface.ThemeUtil;
 import org.kde.kdeconnect_tp.R;
+import org.kde.kdeconnect_tp.databinding.ActivityPresenterBinding;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.media.VolumeProviderCompat;
-
-public class PresenterActivity extends AppCompatActivity {
+public class PresenterActivity extends AppCompatActivity implements SensorEventListener {
+    private ActivityPresenterBinding binding;
 
     private MediaSessionCompat mMediaSession;
 
     private PresenterPlugin plugin;
+
+    private SensorManager sensorManager;
+
+    static final float SENSITIVITY = 0.03f; //TODO: Make configurable?
+
+    public void gyroscopeEvent(SensorEvent event) {
+        float xPos = -event.values[2] * SENSITIVITY;
+        float yPos = -event.values[0] * SENSITIVITY;
+
+        plugin.sendPointer(xPos, yPos);
+    }
+
+    public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
+            gyroscopeEvent(event);
+        }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        //Ignored
+    }
+
+    void enablePointer() {
+        if (sensorManager != null) {
+            return; //Already enabled
+        }
+        sensorManager = ContextCompat.getSystemService(this, SensorManager.class);
+        binding.pointerButton.setVisibility(View.VISIBLE);
+        binding.pointerButton.setOnTouchListener((v, event) -> {
+            if(event.getAction() == MotionEvent.ACTION_DOWN){
+                sensorManager.registerListener(this, sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), SensorManager.SENSOR_DELAY_GAME);
+                v.performClick(); // The linter complains if this is not called
+            }
+            else if (event.getAction() == MotionEvent.ACTION_UP) {
+                sensorManager.unregisterListener(this);
+                plugin.stopPointer();
+            }
+            return true;
+        });
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         ThemeUtil.setUserPreferredTheme(this);
 
-        setContentView(R.layout.activity_presenter);
+        binding = ActivityPresenterBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
         final String deviceId = getIntent().getStringExtra("deviceId");
 
         BackgroundService.RunWithPlugin(this, deviceId, PresenterPlugin.class, plugin -> runOnUiThread(() -> {
             this.plugin = plugin;
-            findViewById(R.id.next_button).setOnClickListener(v -> plugin.sendNext());
-            findViewById(R.id.previous_button).setOnClickListener(v -> plugin.sendPrevious());
+            binding.nextButton.setOnClickListener(v -> plugin.sendNext());
+            binding.previousButton.setOnClickListener(v -> plugin.sendPrevious());
+            if (plugin.isPointerSupported()) {
+                enablePointer();
+            }
         }));
     }
     @Override
@@ -82,21 +135,24 @@ public class PresenterActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
-        BackgroundService.addGuiInUseCounter(this);
         if (mMediaSession != null) {
             mMediaSession.setActive(true);
             return;
         }
-        createMediaSession(); //Mediasession will keep
+        createMediaSession();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        BackgroundService.removeGuiInUseCounter(this);
+
+        if (sensorManager != null) {
+            // Make sure we don't leave the listener on
+            sensorManager.unregisterListener(this);
+        }
 
         if (mMediaSession != null) {
-            PowerManager pm = (PowerManager) this.getSystemService(Context.POWER_SERVICE);
+            PowerManager pm = ContextCompat.getSystemService(this, PowerManager.class);
             boolean screenOn;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
                 screenOn = pm.isInteractive();

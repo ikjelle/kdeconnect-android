@@ -21,7 +21,6 @@
 package org.kde.kdeconnect.Plugins.MprisReceiverPlugin;
 
 import android.content.ComponentName;
-import android.content.Context;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.os.Build;
@@ -30,31 +29,34 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.DialogFragment;
+
+import org.apache.commons.lang3.StringUtils;
 import org.kde.kdeconnect.Helpers.AppsHelper;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.NotificationsPlugin.NotificationReceiver;
 import org.kde.kdeconnect.Plugins.Plugin;
-import org.kde.kdeconnect.UserInterface.AlertDialogFragment;
+import org.kde.kdeconnect.Plugins.PluginFactory;
+import org.kde.kdeconnect.UserInterface.MainActivity;
 import org.kde.kdeconnect.UserInterface.StartActivityAlertDialogFragment;
 import org.kde.kdeconnect_tp.R;
 
 import java.util.HashMap;
 import java.util.List;
 
-import androidx.annotation.Nullable;
-import androidx.annotation.RequiresApi;
-
-@RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-//FIXME: Breaks on Android 4 because it extends OnActiveSessionsChangedListener
-//@PluginFactory.LoadablePlugin
-public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.OnActiveSessionsChangedListener {
-
+@PluginFactory.LoadablePlugin
+@RequiresApi(api = Build.VERSION_CODES.LOLLIPOP_MR1)
+public class MprisReceiverPlugin extends Plugin {
     private final static String PACKET_TYPE_MPRIS = "kdeconnect.mpris";
     private final static String PACKET_TYPE_MPRIS_REQUEST = "kdeconnect.mpris.request";
 
     private static final String TAG = "MprisReceiver";
 
     private HashMap<String, MprisReceiverPlayer> players;
+    private MediaSessionChangeListener mediaSessionChangeListener;
 
     @Override
     public boolean onCreate() {
@@ -64,11 +66,13 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
 
         players = new HashMap<>();
         try {
-            MediaSessionManager manager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            MediaSessionManager manager = ContextCompat.getSystemService(context, MediaSessionManager.class);
             if (null == manager)
                 return false;
 
-            manager.addOnActiveSessionsChangedListener(MprisReceiverPlugin.this, new ComponentName(context, NotificationReceiver.class), new Handler(Looper.getMainLooper()));
+            assert(mediaSessionChangeListener == null);
+            mediaSessionChangeListener = new MediaSessionChangeListener();
+            manager.addOnActiveSessionsChangedListener(mediaSessionChangeListener, new ComponentName(context, NotificationReceiver.class), new Handler(Looper.getMainLooper()));
 
             createPlayers(manager.getActiveSessions(new ComponentName(context, NotificationReceiver.class)));
             sendPlayerList();
@@ -82,9 +86,10 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
     @Override
     public void onDestroy() {
         super.onDestroy();
-        MediaSessionManager manager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
-        if (manager != null) {
-            manager.removeOnActiveSessionsChangedListener(MprisReceiverPlugin.this);
+        MediaSessionManager manager = ContextCompat.getSystemService(context, MediaSessionManager.class);
+        if (manager != null && mediaSessionChangeListener != null) {
+            manager.removeOnActiveSessionsChangedListener(mediaSessionChangeListener);
+            mediaSessionChangeListener = null;
         }
     }
 
@@ -131,6 +136,13 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
             player.setPosition(position);
         }
 
+        if (np.has("setVolume")) {
+            int volume = np.getInt("setVolume", 100);
+            player.setVolume(volume);
+            //Setting volume doesn't seem to always trigger the callback
+            sendMetadata(player);
+        }
+
         if (np.has("action")) {
             String action = np.getString("action");
 
@@ -169,18 +181,20 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
         return new String[]{PACKET_TYPE_MPRIS};
     }
 
-    @Override
-    public void onActiveSessionsChanged(@Nullable List<MediaController> controllers) {
+    private final class MediaSessionChangeListener implements MediaSessionManager.OnActiveSessionsChangedListener {
+        @Override
+        public void onActiveSessionsChanged(@Nullable List<MediaController> controllers) {
 
-        if (null == controllers) {
-            return;
+            if (null == controllers) {
+                return;
+            }
+
+            players.clear();
+
+            createPlayers(controllers);
+            sendPlayerList();
+
         }
-
-        players.clear();
-
-        createPlayers(controllers);
-        sendPlayerList();
-
     }
 
     private void createPlayer(MediaController controller) {
@@ -233,7 +247,7 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
     }
 
     @Override
-    public AlertDialogFragment getPermissionExplanationDialog(int requestCode) {
+    public DialogFragment getPermissionExplanationDialog() {
         return new StartActivityAlertDialogFragment.Builder()
                 .setTitle(R.string.pref_plugin_mpris)
                 .setMessage(R.string.no_permission_mprisreceiver)
@@ -241,13 +255,13 @@ public class MprisReceiverPlugin extends Plugin implements MediaSessionManager.O
                 .setNegativeButton(R.string.cancel)
                 .setIntentAction("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                 .setStartForResult(true)
-                .setRequestCode(requestCode)
+                .setRequestCode(MainActivity.RESULT_NEEDS_RELOAD)
                 .create();
     }
 
     private boolean hasPermission() {
         String notificationListenerList = Settings.Secure.getString(context.getContentResolver(), "enabled_notification_listeners");
-        return (notificationListenerList != null && notificationListenerList.contains(context.getPackageName()));
+        return StringUtils.contains(notificationListenerList, context.getPackageName());
     }
 
 }

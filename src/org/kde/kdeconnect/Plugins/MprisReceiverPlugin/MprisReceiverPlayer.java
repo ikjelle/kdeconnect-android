@@ -27,6 +27,9 @@ import android.os.Build;
 
 import androidx.annotation.RequiresApi;
 
+import static org.apache.commons.lang3.StringUtils.defaultString;
+import static org.apache.commons.lang3.StringUtils.firstNonEmpty;
+
 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
 class MprisReceiverPlayer {
 
@@ -101,29 +104,24 @@ class MprisReceiverPlayer {
         MediaMetadata metadata = controller.getMetadata();
         if (metadata == null) return "";
 
-        String album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM);
-        return album != null ? album : "";
+        return defaultString(metadata.getString(MediaMetadata.METADATA_KEY_ALBUM));
     }
 
     String getArtist() {
         MediaMetadata metadata = controller.getMetadata();
         if (metadata == null) return "";
 
-        String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
-        if (artist == null || artist.isEmpty()) artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
-        if (artist == null || artist.isEmpty()) artist = metadata.getString(MediaMetadata.METADATA_KEY_AUTHOR);
-        if (artist == null || artist.isEmpty()) artist = metadata.getString(MediaMetadata.METADATA_KEY_WRITER);
-
-        return artist != null ? artist : "";
+        return defaultString(firstNonEmpty(metadata.getString(MediaMetadata.METADATA_KEY_ARTIST),
+                metadata.getString(MediaMetadata.METADATA_KEY_AUTHOR),
+                metadata.getString(MediaMetadata.METADATA_KEY_WRITER)));
     }
 
     String getTitle() {
         MediaMetadata metadata = controller.getMetadata();
         if (metadata == null) return "";
 
-        String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
-        if (title == null || title.isEmpty()) title = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
-        return title != null ? title : "";
+        return defaultString(firstNonEmpty(metadata.getString(MediaMetadata.METADATA_KEY_TITLE),
+                metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)));
     }
 
     void previous() {
@@ -147,9 +145,18 @@ class MprisReceiverPlayer {
     }
 
     int getVolume() {
-        if (controller.getPlaybackInfo() == null)
-            return 0;
-        return 100 * controller.getPlaybackInfo().getCurrentVolume() / controller.getPlaybackInfo().getMaxVolume();
+        MediaController.PlaybackInfo info = controller.getPlaybackInfo();
+        if (info == null) return 0;
+        return 100 * info.getCurrentVolume() / info.getMaxVolume();
+    }
+
+    void setVolume(int volume) {
+        MediaController.PlaybackInfo info = controller.getPlaybackInfo();
+        if (info == null) return;
+
+        //Use rounding for the volume, since most devices don't have a very large range
+        double unroundedVolume = info.getMaxVolume() * volume / 100.0 + 0.5;
+        controller.setVolumeTo((int) unroundedVolume, 0);
     }
 
     long getPosition() {

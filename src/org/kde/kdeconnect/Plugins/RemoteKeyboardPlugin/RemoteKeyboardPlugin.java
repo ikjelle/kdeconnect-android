@@ -20,6 +20,7 @@
 
 package org.kde.kdeconnect.Plugins.RemoteKeyboardPlugin;
 
+import android.content.SharedPreferences;
 import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
 import android.preference.PreferenceManager;
@@ -35,7 +36,7 @@ import android.view.inputmethod.InputConnection;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
 import org.kde.kdeconnect.Plugins.PluginFactory;
-import org.kde.kdeconnect.UserInterface.AlertDialogFragment;
+import org.kde.kdeconnect.UserInterface.MainActivity;
 import org.kde.kdeconnect.UserInterface.StartActivityAlertDialogFragment;
 import org.kde.kdeconnect_tp.R;
 
@@ -44,9 +45,10 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import androidx.core.content.ContextCompat;
 import androidx.core.util.Pair;
+import androidx.fragment.app.DialogFragment;
 
 @PluginFactory.LoadablePlugin
-public class RemoteKeyboardPlugin extends Plugin {
+public class RemoteKeyboardPlugin extends Plugin implements SharedPreferences.OnSharedPreferenceChangeListener {
 
     private final static String PACKET_TYPE_MOUSEPAD_REQUEST = "kdeconnect.mousepad.request";
     private final static String PACKET_TYPE_MOUSEPAD_ECHO = "kdeconnect.mousepad.echo";
@@ -125,6 +127,12 @@ public class RemoteKeyboardPlugin extends Plugin {
         }
         if (RemoteKeyboardService.instance != null)
             RemoteKeyboardService.instance.handler.post(() -> RemoteKeyboardService.instance.updateInputView());
+
+        PreferenceManager.getDefaultSharedPreferences(context).registerOnSharedPreferenceChangeListener(this);
+
+        final boolean editingOnly = PreferenceManager.getDefaultSharedPreferences(context).getBoolean(context.getString(R.string.remotekeyboard_editing_only), true);
+        notifyKeyboardState(editingOnly ? RemoteKeyboardService.instance.visible : true);
+
         return true;
     }
 
@@ -156,7 +164,7 @@ public class RemoteKeyboardPlugin extends Plugin {
 
     @Override
     public Drawable getIcon() {
-        return ContextCompat.getDrawable(context, R.drawable.ic_action_keyboard);
+        return ContextCompat.getDrawable(context, R.drawable.ic_action_keyboard_24dp);
     }
 
     @Override
@@ -403,7 +411,7 @@ public class RemoteKeyboardPlugin extends Plugin {
     }
 
     @Override
-    public AlertDialogFragment getPermissionExplanationDialog(int requestCode) {
+    public DialogFragment getPermissionExplanationDialog() {
         return new StartActivityAlertDialogFragment.Builder()
                 .setTitle(R.string.pref_plugin_remotekeyboard)
                 .setMessage(R.string.no_permissions_remotekeyboard)
@@ -411,7 +419,15 @@ public class RemoteKeyboardPlugin extends Plugin {
                 .setNegativeButton(R.string.cancel)
                 .setIntentAction(Settings.ACTION_INPUT_METHOD_SETTINGS)
                 .setStartForResult(true)
-                .setRequestCode(requestCode)
+                .setRequestCode(MainActivity.RESULT_NEEDS_RELOAD)
                 .create();
+    }
+
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+        if (key.equals(context.getString(R.string.remotekeyboard_editing_only))) {
+            final boolean editingOnly = sharedPreferences.getBoolean(context.getString(R.string.remotekeyboard_editing_only), true);
+            notifyKeyboardState(editingOnly ? RemoteKeyboardService.instance.visible : true);
+        }
     }
 }

@@ -22,7 +22,6 @@
 package org.kde.kdeconnect.Plugins.RunCommandPlugin;
 
 import android.content.ClipboardManager;
-import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -31,11 +30,12 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
-import android.widget.ListView;
-import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import androidx.annotation.RequiresApi;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -43,26 +43,22 @@ import org.kde.kdeconnect.BackgroundService;
 import org.kde.kdeconnect.UserInterface.List.ListAdapter;
 import org.kde.kdeconnect.UserInterface.ThemeUtil;
 import org.kde.kdeconnect_tp.R;
+import org.kde.kdeconnect_tp.databinding.ActivityRunCommandBinding;
 
 import java.util.ArrayList;
 import java.util.Collections;
-
-import androidx.annotation.RequiresApi;
-import androidx.appcompat.app.AlertDialog;
-import androidx.appcompat.app.AppCompatActivity;
+import java.util.Comparator;
+import java.util.List;
 
 public class RunCommandActivity extends AppCompatActivity {
-
+    private ActivityRunCommandBinding binding;
     private String deviceId;
     private final RunCommandPlugin.CommandsChangedCallback commandsChangedCallback = this::updateView;
-    private ArrayList<ListAdapter.Item> commandItems;
+    private List<CommandEntry> commandItems;
 
     private void updateView() {
-
         BackgroundService.RunWithPlugin(this, deviceId, RunCommandPlugin.class, plugin -> runOnUiThread(() -> {
-            ListView view = findViewById(R.id.runcommandslist);
-
-            registerForContextMenu(view);
+            registerForContextMenu(binding.runCommandsList);
 
             commandItems = new ArrayList<>();
             for (JSONObject obj : plugin.getCommandList()) {
@@ -74,28 +70,20 @@ public class RunCommandActivity extends AppCompatActivity {
                 }
             }
 
-            Collections.sort(commandItems, (lhs, rhs) -> {
-                String lName = ((CommandEntry) lhs).getName();
-                String rName = ((CommandEntry) rhs).getName();
-                return lName.compareTo(rName);
-            });
+            Collections.sort(commandItems, Comparator.comparing(CommandEntry::getName));
 
             ListAdapter adapter = new ListAdapter(RunCommandActivity.this, commandItems);
 
-            view.setAdapter(adapter);
-            view.setOnItemClickListener((adapterView, view1, i, l) -> {
-                CommandEntry entry = (CommandEntry) commandItems.get(i);
-                plugin.runCommand(entry.getKey());
-            });
+            binding.runCommandsList.setAdapter(adapter);
+            binding.runCommandsList.setOnItemClickListener((adapterView, view1, i, l) ->
+                    plugin.runCommand(commandItems.get(i).getKey()));
 
-
-            TextView explanation = findViewById(R.id.addcomand_explanation);
             String text = getString(R.string.addcommand_explanation);
             if (!plugin.canAddCommand()) {
                 text += "\n" + getString(R.string.addcommand_explanation2);
             }
-            explanation.setText(text);
-            explanation.setVisibility(commandItems.isEmpty() ? View.VISIBLE : View.GONE);
+            binding.addComandExplanation.setText(text);
+            binding.addComandExplanation.setVisibility(commandItems.isEmpty() ? View.VISIBLE : View.GONE);
         }));
     }
 
@@ -103,29 +91,32 @@ public class RunCommandActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         ThemeUtil.setUserPreferredTheme(this);
-        setContentView(R.layout.activity_runcommand);
+
+        binding = ActivityRunCommandBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
         deviceId = getIntent().getStringExtra("deviceId");
 
-        boolean canAddCommands = BackgroundService.getInstance().getDevice(deviceId).getPlugin(RunCommandPlugin.class).canAddCommand();
-
-        FloatingActionButton addCommandButton = findViewById(R.id.add_command_button);
-        if (canAddCommands) {
-            addCommandButton.show();
-        } else {
-            addCommandButton.hide();
+        boolean canAddCommands = false;
+        try {
+            canAddCommands = BackgroundService.getInstance().getDevice(deviceId).getPlugin(RunCommandPlugin.class).canAddCommand();
+        } catch (Exception ignore) {
         }
 
-        addCommandButton.setOnClickListener(v -> BackgroundService.RunWithPlugin(RunCommandActivity.this, deviceId, RunCommandPlugin.class, plugin -> {
+        if (canAddCommands) {
+            binding.addCommandButton.show();
+        } else {
+            binding.addCommandButton.hide();
+        }
+
+        binding.addCommandButton.setOnClickListener(v -> BackgroundService.RunWithPlugin(RunCommandActivity.this, deviceId, RunCommandPlugin.class, plugin -> {
             plugin.sendSetupPacket();
-            AlertDialog dialog = new AlertDialog.Builder(RunCommandActivity.this)
+             new AlertDialog.Builder(RunCommandActivity.this)
                     .setTitle(R.string.add_command)
                     .setMessage(R.string.add_command_description)
                     .setPositiveButton(R.string.ok, null)
-                    .create();
-            dialog.show();
+                    .show();
         }));
-
         updateView();
     }
 
@@ -143,7 +134,7 @@ public class RunCommandActivity extends AppCompatActivity {
         if (item.getItemId() == R.id.copy_url_to_clipboard) {
             CommandEntry entry = (CommandEntry) commandItems.get(info.position);
             String url = "kdeconnect://runcommand/" + deviceId + "/" + entry.getKey();
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipboardManager cm = ContextCompat.getSystemService(this, ClipboardManager.class);
             cm.setText(url);
             Toast toast = Toast.makeText(this, R.string.clipboard_toast, Toast.LENGTH_SHORT);
             toast.show();

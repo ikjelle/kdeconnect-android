@@ -28,6 +28,8 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
+import androidx.core.content.ContextCompat;
+
 import java.util.HashSet;
 
 @TargetApi(Build.VERSION_CODES.HONEYCOMB)
@@ -41,6 +43,7 @@ public class ClipboardListener {
 
     private final Context context;
     private String currentContent;
+    private long updateTimestamp;
 
     private ClipboardManager cm = null;
     private ClipboardManager.OnPrimaryClipChangedListener listener;
@@ -50,6 +53,7 @@ public class ClipboardListener {
     public static ClipboardListener instance(Context context) {
         if (_instance == null) {
             _instance = new ClipboardListener(context);
+            // FIXME: The _instance we return won't be completely initialized yet since initialization happens on a new thread (why?)
         }
         return _instance;
     }
@@ -66,7 +70,7 @@ public class ClipboardListener {
         context = ctx;
 
         new Handler(Looper.getMainLooper()).post(() -> {
-            cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+            cm = ContextCompat.getSystemService(context, ClipboardManager.class);
             listener = () -> {
                 try {
 
@@ -76,7 +80,7 @@ public class ClipboardListener {
                     if (content.equals(currentContent)) {
                         return;
                     }
-
+                    updateTimestamp = System.currentTimeMillis();
                     currentContent = content;
 
                     for (ClipboardObserver observer : observers) {
@@ -91,10 +95,21 @@ public class ClipboardListener {
         });
     }
 
+    public String getCurrentContent() {
+        return currentContent;
+    }
+
+    public long getUpdateTimestamp() {
+        return updateTimestamp;
+    }
+
     @SuppressWarnings("deprecation")
     public void setText(String text) {
-        currentContent = text;
-        cm.setText(text);
+        if (cm != null) {
+            updateTimestamp = System.currentTimeMillis();
+            currentContent = text;
+            cm.setText(text);
+        }
     }
 
 }

@@ -23,6 +23,7 @@ package org.kde.kdeconnect;
 import android.content.Context;
 import android.util.Log;
 
+import org.apache.commons.io.IOUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -40,16 +41,15 @@ import java.util.Set;
 
 public class NetworkPacket {
 
-    public final static int ProtocolVersion = 7;
-
     public final static String PACKET_TYPE_IDENTITY = "kdeconnect.identity";
     public final static String PACKET_TYPE_PAIR = "kdeconnect.pair";
-    public final static String PACKET_TYPE_ENCRYPTED = "kdeconnect.encrypted";
+
+    public final static int PACKET_REPLACEID_MOUSEMOVE = 0;
+    public final static int PACKET_REPLACEID_PRESENTERPOINTER = 1;
 
     public static Set<String> protocolPacketTypes = new HashSet<String>() {{
         add(PACKET_TYPE_IDENTITY);
         add(PACKET_TYPE_PAIR);
-        add(PACKET_TYPE_ENCRYPTED);
     }};
 
     private long mId;
@@ -107,6 +107,13 @@ public class NetworkPacket {
         return mBody.optInt(key, defaultValue);
     }
 
+    public void set(String key, int value) {
+        try {
+            mBody.put(key, value);
+        } catch (Exception ignored) {
+        }
+    }
+
     public long getLong(String key) {
         return mBody.optLong(key, -1);
     }
@@ -115,7 +122,7 @@ public class NetworkPacket {
         return mBody.optLong(key, defaultValue);
     }
 
-    public void set(String key, int value) {
+    public void set(String key, long value) {
         try {
             mBody.put(key, value);
         } catch (Exception ignored) {
@@ -278,7 +285,7 @@ public class NetworkPacket {
         try {
             np.mBody.put("deviceId", deviceId);
             np.mBody.put("deviceName", DeviceHelper.getDeviceName(context));
-            np.mBody.put("protocolVersion", NetworkPacket.ProtocolVersion);
+            np.mBody.put("protocolVersion", DeviceHelper.ProtocolVersion);
             np.mBody.put("deviceType", DeviceHelper.getDeviceType(context).toString());
             np.mBody.put("incomingCapabilities", new JSONArray(PluginFactory.getIncomingCapabilities()));
             np.mBody.put("outgoingCapabilities", new JSONArray(PluginFactory.getOutgoingCapabilities()));
@@ -353,9 +360,7 @@ public class NetworkPacket {
         public void close() {
             //TODO: If socket only close socket if that also closes the streams that is
             try {
-                if (inputStream != null) {
-                    inputStream.close();
-                }
+                IOUtils.close(inputStream);
             } catch(IOException ignored) {}
 
             try {

@@ -15,16 +15,7 @@ import android.view.SubMenu;
 import android.view.View;
 import android.widget.TextView;
 
-import com.google.android.material.navigation.NavigationView;
-
-import org.kde.kdeconnect.BackgroundService;
-import org.kde.kdeconnect.Device;
-import org.kde.kdeconnect.Helpers.DeviceHelper;
-import org.kde.kdeconnect_tp.R;
-
-import java.util.Collection;
-import java.util.HashMap;
-
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.ActionBarDrawerToggle;
 import androidx.appcompat.app.AppCompatActivity;
@@ -32,8 +23,18 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.fragment.app.Fragment;
-import butterknife.BindView;
-import butterknife.ButterKnife;
+
+import com.google.android.material.navigation.NavigationView;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.kde.kdeconnect.BackgroundService;
+import org.kde.kdeconnect.Device;
+import org.kde.kdeconnect.Helpers.DeviceHelper;
+import org.kde.kdeconnect_tp.R;
+import org.kde.kdeconnect_tp.databinding.ActivityMainBinding;
+
+import java.util.Collection;
+import java.util.HashMap;
 
 public class MainActivity extends AppCompatActivity implements SharedPreferences.OnSharedPreferenceChangeListener {
 
@@ -54,9 +55,8 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
 
     public static final String EXTRA_DEVICE_ID = "deviceId";
 
-    @BindView(R.id.navigation_drawer) NavigationView mNavigationView;
-    @BindView(R.id.drawer_layout) DrawerLayout mDrawerLayout;
-    @BindView(R.id.toolbar) Toolbar mToolbar;
+    private NavigationView mNavigationView;
+    private DrawerLayout mDrawerLayout;
     private TextView mNavViewDeviceName;
 
     private String mCurrentDevice;
@@ -68,13 +68,15 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // We need to set the theme before the call to 'super.onCreate' below
         ThemeUtil.setUserPreferredTheme(this);
         super.onCreate(savedInstanceState);
 
-        setContentView(R.layout.activity_main);
+        final ActivityMainBinding binding = ActivityMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
-        ButterKnife.bind(this);
+        mNavigationView = binding.navigationDrawer;
+        mDrawerLayout = binding.drawerLayout;
+        final Toolbar mToolbar = binding.toolbar;
 
         View mDrawerHeader = mNavigationView.getHeaderView(0);
         mNavViewDeviceName = mDrawerHeader.findViewById(R.id.device_name);
@@ -99,11 +101,13 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
         mDrawerToggle.setDrawerIndicatorEnabled(true);
         mDrawerToggle.syncState();
 
+        preferences = getSharedPreferences("stored_menu_selection", Context.MODE_PRIVATE);
+
+        // Note: The preference changed listener should be registered before getting the name, because getting
+        // it can trigger a background fetch from the internet that will eventually update the preference
+        PreferenceManager.getDefaultSharedPreferences(this).registerOnSharedPreferenceChangeListener(this);
         String deviceName = DeviceHelper.getDeviceName(this);
         mNavViewDeviceName.setText(deviceName);
-
-        preferences = getSharedPreferences("stored_menu_selection", Context.MODE_PRIVATE);
-        PreferenceManager.getDefaultSharedPreferences(this).registerOnSharedPreferenceChangeListener(this);
 
         mNavigationView.setNavigationItemSelectedListener(menuItem -> {
             mCurrentMenuEntry = menuItem.getItemId();
@@ -264,11 +268,11 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
             }
 
             MenuItem addDeviceItem = devicesMenu.add(Menu.FIRST, MENU_ENTRY_ADD_DEVICE, 1000, R.string.pair_new_device);
-            addDeviceItem.setIcon(R.drawable.ic_action_content_add_circle_outline);
+            addDeviceItem.setIcon(R.drawable.ic_action_content_add_circle_outline_32dp);
             addDeviceItem.setCheckable(true);
 
             MenuItem settingsItem = menu.add(Menu.FIRST, MENU_ENTRY_SETTINGS, 1000, R.string.settings);
-            settingsItem.setIcon(R.drawable.ic_action_settings);
+            settingsItem.setIcon(R.drawable.ic_settings_white_32dp);
             settingsItem.setCheckable(true);
 
             //Ids might have changed
@@ -283,14 +287,15 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
     @Override
     protected void onStart() {
         super.onStart();
-        BackgroundService.addGuiInUseCounter(this, true);
-        BackgroundService.RunCommand(this, service -> service.addDeviceListChangedCallback("MainActivity", this::updateDeviceList));
+        BackgroundService.RunCommand(this, service -> {
+            service.onNetworkChange();
+            service.addDeviceListChangedCallback("MainActivity", this::updateDeviceList);
+        });
         updateDeviceList();
     }
 
     @Override
     protected void onStop() {
-        BackgroundService.removeGuiInUseCounter(this);
         BackgroundService.RunCommand(this, service -> service.removeDeviceListChangedCallback("MainActivity"));
         super.onStop();
     }
@@ -346,28 +351,19 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        switch (requestCode) {
-            case RESULT_NEEDS_RELOAD:
-                BackgroundService.RunCommand(this, service -> {
-                    Device device = service.getDevice(mCurrentDevice);
-                    device.reloadPluginsFromSettings();
-                });
-                break;
-            default:
-                super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RESULT_NEEDS_RELOAD) {
+            BackgroundService.RunCommand(this, service -> {
+                Device device = service.getDevice(mCurrentDevice);
+                device.reloadPluginsFromSettings();
+            });
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        boolean grantedPermission = false;
-        for (int result : grantResults) {
-            if (result == PackageManager.PERMISSION_GRANTED) {
-                grantedPermission = true;
-                break;
-            }
-        }
-        if (grantedPermission) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        if (ArrayUtils.contains(grantResults, PackageManager.PERMISSION_GRANTED)) {
             //New permission granted, reload plugins
             BackgroundService.RunCommand(this, service -> {
                 Device device = service.getDevice(mCurrentDevice);
@@ -376,15 +372,12 @@ public class MainActivity extends AppCompatActivity implements SharedPreferences
         }
     }
 
+
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
-        switch (key) {
-            case DeviceHelper.KEY_DEVICE_NAME_PREFERENCE:
-                mNavViewDeviceName.setText(DeviceHelper.getDeviceName(this));
-                BackgroundService.RunCommand(this, BackgroundService::onNetworkChange);
-                break;
-            default:
-                break;
+        if (DeviceHelper.KEY_DEVICE_NAME_PREFERENCE.equals(key)) {
+            mNavViewDeviceName.setText(DeviceHelper.getDeviceName(this));
+            BackgroundService.RunCommand(this, BackgroundService::onNetworkChange); //Re-send our identity packet
         }
     }
 }

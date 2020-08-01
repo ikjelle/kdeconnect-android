@@ -8,6 +8,8 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.preference.PreferenceManager;
 
+import androidx.core.content.ContextCompat;
+
 import org.kde.kdeconnect_tp.R;
 
 public class NotificationHelper {
@@ -18,6 +20,7 @@ public class NotificationHelper {
         public final static String MEDIA_CONTROL = "media_control";
         public final static String FILETRANSFER = "filetransfer";
         public final static String RECEIVENOTIFICATION = "receive";
+        public final static String HIGHPRIORITY = "highpriority";
     }
 
     public static void notifyCompat(NotificationManager notificationManager, int notificationId, Notification notification) {
@@ -44,7 +47,7 @@ public class NotificationHelper {
             return;
         }
 
-        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationManager manager = ContextCompat.getSystemService(context, NotificationManager.class);
 
         NotificationChannel persistentChannel = new NotificationChannel(
                 Channels.PERSISTENT,
@@ -80,6 +83,8 @@ public class NotificationHelper {
                 NotificationManager.IMPORTANCE_DEFAULT)
         );
 
+        NotificationChannel highPriority = new NotificationChannel(Channels.HIGHPRIORITY, context.getString(R.string.notification_channel_high_priority), NotificationManager.IMPORTANCE_HIGH);
+        manager.createNotificationChannel(highPriority);
     }
 
 

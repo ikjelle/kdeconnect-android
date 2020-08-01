@@ -26,19 +26,25 @@ import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.view.KeyEvent;
 
+import androidx.core.content.ContextCompat;
+
+import org.apache.commons.lang3.ArrayUtils;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
 import org.kde.kdeconnect.Plugins.PluginFactory;
 import org.kde.kdeconnect_tp.R;
-
-import androidx.core.content.ContextCompat;
 
 import static org.kde.kdeconnect.Plugins.MousePadPlugin.KeyListenerView.SpecialKeysMap;
 
 @PluginFactory.LoadablePlugin
 public class PresenterPlugin extends Plugin {
 
+    private final static String PACKET_TYPE_PRESENTER = "kdeconnect.presenter";
     private final static String PACKET_TYPE_MOUSEPAD_REQUEST = "kdeconnect.mousepad.request";
+
+    public boolean isPointerSupported() {
+        return device.supportsPacketType(PACKET_TYPE_PRESENTER);
+    }
 
     @Override
     public String getDisplayName() {
@@ -52,7 +58,7 @@ public class PresenterPlugin extends Plugin {
 
     @Override
     public Drawable getIcon() {
-        return ContextCompat.getDrawable(context, R.drawable.ic_presenter);
+        return ContextCompat.getDrawable(context, R.drawable.ic_presenter_24dp);
     }
 
     @Override
@@ -73,13 +79,11 @@ public class PresenterPlugin extends Plugin {
     }
 
     @Override
-    public String[] getSupportedPacketTypes() {
-        return new String[0];
-    }
+    public String[] getSupportedPacketTypes() {  return ArrayUtils.EMPTY_STRING_ARRAY; }
 
     @Override
     public String[] getOutgoingPacketTypes() {
-        return new String[]{PACKET_TYPE_MOUSEPAD_REQUEST};
+        return new String[]{PACKET_TYPE_MOUSEPAD_REQUEST, PACKET_TYPE_PRESENTER};
     }
 
     @Override
@@ -111,4 +115,23 @@ public class PresenterPlugin extends Plugin {
         device.sendPacket(np);
     }
 
+    public void sendPointer(float xDelta, float yDelta) {
+        NetworkPacket np = device.getAndRemoveUnsentPacket(NetworkPacket.PACKET_REPLACEID_PRESENTERPOINTER);
+        if (np == null) {
+            np = new NetworkPacket(PACKET_TYPE_PRESENTER);
+        } else {
+            xDelta += np.getInt("dx");
+            yDelta += np.getInt("dy");
+        }
+        np.set("dx", xDelta);
+        np.set("dy", yDelta);
+        device.sendPacket(np, NetworkPacket.PACKET_REPLACEID_PRESENTERPOINTER);
+    }
+
+    public void stopPointer() {
+        device.getAndRemoveUnsentPacket(NetworkPacket.PACKET_REPLACEID_PRESENTERPOINTER);
+        NetworkPacket np = new NetworkPacket(PACKET_TYPE_PRESENTER);
+        np.set("stop", true);
+        device.sendPacket(np);
+    }
 }

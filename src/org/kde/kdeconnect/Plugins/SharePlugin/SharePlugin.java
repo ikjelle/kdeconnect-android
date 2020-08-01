@@ -23,7 +23,6 @@ package org.kde.kdeconnect.Plugins.SharePlugin;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ClipboardManager;
-import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -33,7 +32,13 @@ import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.WorkerThread;
+import androidx.core.content.ContextCompat;
+
+import org.apache.commons.lang3.StringUtils;
 import org.kde.kdeconnect.Helpers.FilesHelper;
+import org.kde.kdeconnect.Helpers.IntentHelper;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
 import org.kde.kdeconnect.Plugins.PluginFactory;
@@ -45,10 +50,13 @@ import org.kde.kdeconnect_tp.R;
 import java.net.URL;
 import java.util.ArrayList;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.WorkerThread;
-import androidx.core.content.ContextCompat;
-
+/**
+ * A Plugin for sharing and receiving files and uris.
+ * <p>
+ *     All of the associated I/O work is scheduled on background
+ *     threads by {@link BackgroundJobHandler}.
+ * </p>
+ */
 @PluginFactory.LoadablePlugin
 public class SharePlugin extends Plugin {
     final static String ACTION_CANCEL_SHARE = "org.kde.kdeconnect.Plugins.SharePlugin.CancelShare";
@@ -87,7 +95,7 @@ public class SharePlugin extends Plugin {
 
     @Override
     public Drawable getIcon() {
-        return ContextCompat.getDrawable(context, R.drawable.share_plugin_action);
+        return ContextCompat.getDrawable(context, R.drawable.share_plugin_action_24dp);
     }
 
     @Override
@@ -163,12 +171,12 @@ public class SharePlugin extends Plugin {
         Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
         browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-        context.startActivity(browserIntent);
+        IntentHelper.startActivityFromBackground(context, browserIntent, url);
     }
 
     private void receiveText(NetworkPacket np) {
         String text = np.getString("text");
-        ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipboardManager cm = ContextCompat.getSystemService(context, ClipboardManager.class);
         cm.setText(text);
         handler.post(() -> Toast.makeText(context, R.string.shareplugin_text_saved, Toast.LENGTH_LONG).show());
     }
@@ -178,9 +186,9 @@ public class SharePlugin extends Plugin {
         CompositeReceiveFileJob job;
 
         boolean hasNumberOfFiles = np.has(KEY_NUMBER_OF_FILES);
-        boolean hasOpen = np.has("open");
+        boolean isOpen = np.getBoolean("open", false);
 
-        if (hasNumberOfFiles && !hasOpen && receiveFileJob != null) {
+        if (hasNumberOfFiles && !isOpen && receiveFileJob != null) {
             job = receiveFileJob;
         } else {
             job = new CompositeReceiveFileJob(device, receiveFileJobCallback);
@@ -194,7 +202,7 @@ public class SharePlugin extends Plugin {
         job.addNetworkPacket(np);
 
         if (job != receiveFileJob) {
-            if (hasNumberOfFiles && !hasOpen) {
+            if (hasNumberOfFiles && !isOpen) {
                 receiveFileJob = job;
             }
             backgroundJobHandler.runJob(job);
@@ -207,7 +215,7 @@ public class SharePlugin extends Plugin {
     }
 
     void sendUriList(final ArrayList<Uri> uriList) {
-        CompositeUploadFileJob job = null;
+        CompositeUploadFileJob job;
 
         if (uploadFileJob == null) {
             job = new CompositeUploadFileJob(device, this.receiveFileJobCallback);
@@ -257,7 +265,7 @@ public class SharePlugin extends Plugin {
                 String subject = extras.getString(Intent.EXTRA_SUBJECT);
 
                 //Hack: Detect shared youtube videos, so we can open them in the browser instead of as text
-                if (subject != null && subject.endsWith("YouTube")) {
+                if (StringUtils.endsWith(subject, "YouTube")) {
                     int index = text.indexOf(": http://youtu.be/");
                     if (index > 0) {
                         text = text.substring(index + 2); //Skip ": "

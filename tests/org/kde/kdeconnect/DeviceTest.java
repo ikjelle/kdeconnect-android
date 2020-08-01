@@ -27,6 +27,8 @@ import android.preference.PreferenceManager;
 import android.util.Base64;
 import android.util.Log;
 
+import androidx.core.content.ContextCompat;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -56,7 +58,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Matchers.eq;
 
 @RunWith(PowerMockRunner.class)
-@PrepareForTest({Base64.class, Log.class, PreferenceManager.class})
+@PrepareForTest({Base64.class, Log.class, PreferenceManager.class, ContextCompat.class})
 public class DeviceTest {
 
     private Context context;
@@ -111,7 +113,8 @@ public class DeviceTest {
         PowerMockito.when(PreferenceManager.getDefaultSharedPreferences(any())).thenReturn(defaultSettings);
         RsaHelper.initialiseRsaKeys(context);
 
-        Mockito.when(context.getSystemService(eq(Context.NOTIFICATION_SERVICE))).thenReturn(Mockito.mock(NotificationManager.class));
+        PowerMockito.mockStatic(ContextCompat.class);
+        PowerMockito.when(ContextCompat.getSystemService(context, NotificationManager.class)).thenReturn(Mockito.mock(NotificationManager.class));
     }
 
     @Test
@@ -155,17 +158,6 @@ public class DeviceTest {
         Device.PairingCallback pairingCallback = Mockito.mock(Device.PairingCallback.class);
         device.addPairingCallback(pairingCallback);
 
-        KeyPair keyPair;
-        try {
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-            keyGen.initialize(2048);
-            keyPair = keyGen.genKeyPair();
-        } catch (Exception e) {
-            Log.e("KDE/initializeRsaKeys", "Exception", e);
-            Log.e("KDE/initializeRsaKeys", "Exception", e);
-            return;
-        }
-        device.publicKey = keyPair.getPublic();
 
         ArgumentCaptor<BasePairingHandler.PairingHandlerCallback> pairingHandlerCallback = ArgumentCaptor.forClass(BasePairingHandler.PairingHandlerCallback.class);
         Mockito.verify(link, Mockito.times(1)).getPairingHandler(eq(device), pairingHandlerCallback.capture());
@@ -174,7 +166,6 @@ public class DeviceTest {
         assertEquals(device.getDeviceId(), "unpairedTestDevice");
         assertEquals(device.getName(), "Unpaired Test Device");
         assertEquals(device.getDeviceType(), Device.DeviceType.Phone);
-        assertNotNull(device.publicKey);
         assertNull(device.certificate);
 
         pairingHandlerCallback.getValue().pairingDone();
@@ -195,15 +186,7 @@ public class DeviceTest {
     }
 
     @Test
-    public void testPairingDoneWithCertificate() throws Exception {
-        KeyPair keyPair = null;
-        try {
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-            keyGen.initialize(2048);
-            keyPair = keyGen.genKeyPair();
-        } catch (Exception e) {
-            Log.e("KDE/initializeRsaKeys", "Exception", e);
-        }
+    public void testPairingDoneWithCertificate() {
 
         NetworkPacket fakeNetworkPacket = new NetworkPacket(NetworkPacket.PACKET_TYPE_IDENTITY);
         fakeNetworkPacket.set("deviceId", "unpairedTestDevice");
@@ -234,13 +217,11 @@ public class DeviceTest {
         Mockito.when(link.getPairingHandler(any(Device.class), any(BasePairingHandler.PairingHandlerCallback.class))).thenReturn(Mockito.mock(LanPairingHandler.class));
         Mockito.when(link.getLinkProvider()).thenReturn(linkProvider);
         Device device = new Device(context, fakeNetworkPacket, link);
-        device.publicKey = keyPair.getPublic();
 
         assertNotNull(device);
         assertEquals(device.getDeviceId(), "unpairedTestDevice");
         assertEquals(device.getName(), "Unpaired Test Device");
         assertEquals(device.getDeviceType(), Device.DeviceType.Phone);
-        assertNotNull(device.publicKey);
         assertNotNull(device.certificate);
 
         Method method;

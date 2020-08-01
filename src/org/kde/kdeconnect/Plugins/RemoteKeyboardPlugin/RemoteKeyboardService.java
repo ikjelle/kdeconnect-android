@@ -20,7 +20,6 @@
 
 package org.kde.kdeconnect.Plugins.RemoteKeyboardPlugin;
 
-import android.content.Context;
 import android.content.Intent;
 import android.inputmethodservice.InputMethodService;
 import android.inputmethodservice.Keyboard;
@@ -29,12 +28,15 @@ import android.inputmethodservice.KeyboardView.OnKeyboardActionListener;
 import android.os.Handler;
 import android.util.Log;
 import android.view.View;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Toast;
 
-import org.kde.kdeconnect.UserInterface.DeviceSettingsActivity;
+import androidx.core.content.ContextCompat;
+
 import org.kde.kdeconnect.UserInterface.MainActivity;
+import org.kde.kdeconnect.UserInterface.PluginSettingsActivity;
 import org.kde.kdeconnect_tp.R;
 
 import java.util.ArrayList;
@@ -72,10 +74,10 @@ public class RemoteKeyboardService
         List<Keyboard.Key> keys = currentKeyboard.getKeys();
         boolean connected = RemoteKeyboardPlugin.isConnected();
 //        Log.d("RemoteKeyboardService", "Updating keyboard connection icon, connected=" + connected);
-        int disconnectedIcon = R.drawable.ic_phonelink_off_white_36dp;
-        int connectedIcon = R.drawable.ic_phonelink_white_36dp;
+        int disconnectedIcon = R.drawable.ic_phonelink_off_36dp;
+        int connectedIcon = R.drawable.ic_phonelink_36dp;
         int statusKeyIdx = 3;
-        keys.get(statusKeyIdx).icon = getResources().getDrawable(connected ? connectedIcon : disconnectedIcon);
+        keys.get(statusKeyIdx).icon = ContextCompat.getDrawable(this, connected ? connectedIcon : disconnectedIcon);
         inputView.invalidateKey(statusKeyIdx);
     }
 
@@ -119,6 +121,8 @@ public class RemoteKeyboardService
         } finally {
             RemoteKeyboardPlugin.releaseInstances();
         }
+
+        getWindow().getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     @Override
@@ -133,6 +137,8 @@ public class RemoteKeyboardService
         } finally {
             RemoteKeyboardPlugin.releaseInstances();
         }
+
+        getWindow().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     @Override
@@ -162,10 +168,10 @@ public class RemoteKeyboardService
                     if (instances.size() == 1) {  // single instance of RemoteKeyboardPlugin -> access its settings
                         RemoteKeyboardPlugin plugin = instances.get(0);
                         if (plugin != null) {
-                            Intent intent = new Intent(this, DeviceSettingsActivity.class);
+                            Intent intent = new Intent(this, PluginSettingsActivity.class);
                             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            intent.putExtra(DeviceSettingsActivity.EXTRA_DEVICE_ID, plugin.getDeviceId());
-                            intent.putExtra(DeviceSettingsActivity.EXTRA_PLUGIN_KEY, plugin.getPluginKey());
+                            intent.putExtra(PluginSettingsActivity.EXTRA_DEVICE_ID, plugin.getDeviceId());
+                            intent.putExtra(PluginSettingsActivity.EXTRA_PLUGIN_KEY, plugin.getPluginKey());
                             startActivity(intent);
                         }
                     } else { // != 1 instance of plugin -> show main activity view
@@ -184,7 +190,7 @@ public class RemoteKeyboardService
                 break;
             }
             case 2: { // "keyboard"
-                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                InputMethodManager imm = ContextCompat.getSystemService(this, InputMethodManager.class);
                 imm.showInputMethodPicker();
                 break;
             }

@@ -100,7 +100,6 @@
             android:contentDescription="@string/mpris_next"
             android:src="@drawable/ic_next_black"
             android:theme="@style/DisableableButton" />
-
     </LinearLayout>
 
     <LinearLayout

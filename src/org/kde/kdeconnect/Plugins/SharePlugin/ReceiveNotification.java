@@ -23,7 +23,6 @@ package org.kde.kdeconnect.Plugins.SharePlugin;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -31,6 +30,10 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.preference.PreferenceManager;
+
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
 import org.kde.kdeconnect.Device;
 import org.kde.kdeconnect.Helpers.NotificationHelper;
@@ -40,30 +43,29 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
-import androidx.core.app.NotificationCompat;
-import androidx.core.content.FileProvider;
-
 class ReceiveNotification {
     private final NotificationManager notificationManager;
     private final int notificationId;
     private NotificationCompat.Builder builder;
     private final Device device;
-    private long currentJobId;
+    private long jobId;
 
     //https://documentation.onesignal.com/docs/android-customizations#section-big-picture
     private static final int bigImageWidth = 1440;
     private static final int bigImageHeight = 720;
 
-    public ReceiveNotification(Device device) {
+    public ReceiveNotification(Device device, long jobId) {
         this.device = device;
 
+        this.jobId = jobId;
         notificationId = (int) System.currentTimeMillis();
-        notificationManager = (NotificationManager) device.getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager = ContextCompat.getSystemService(device.getContext(), NotificationManager.class);
         builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.FILETRANSFER)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setAutoCancel(true)
                 .setOngoing(true)
                 .setProgress(100, 0, true);
+        addCancelAction();
     }
 
     public void show() {
@@ -74,10 +76,8 @@ class ReceiveNotification {
         notificationManager.cancel(notificationId);
     }
 
-    public void addCancelAction(long jobId) {
-        builder.mActions.clear();
+    public void addCancelAction() {
 
-        currentJobId = jobId;
         Intent cancelIntent = new Intent(device.getContext(), ShareBroadcastReceiver.class);
         cancelIntent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         cancelIntent.setAction(SharePlugin.ACTION_CANCEL_SHARE);
@@ -85,13 +85,7 @@ class ReceiveNotification {
         cancelIntent.putExtra(SharePlugin.CANCEL_SHARE_DEVICE_ID_EXTRA, device.getDeviceId());
         PendingIntent cancelPendingIntent = PendingIntent.getBroadcast(device.getContext(), 0, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
-        builder.addAction(R.drawable.ic_reject_pairing, device.getContext().getString(R.string.cancel), cancelPendingIntent);
-    }
-
-    public long getCurrentJobId() { return currentJobId; }
-
-    public int getNotificationId() {
-        return notificationId;
+        builder.addAction(R.drawable.ic_reject_pairing_24dp, device.getContext().getString(R.string.cancel), cancelPendingIntent);
     }
 
     public void setTitle(String title) {
@@ -106,7 +100,7 @@ class ReceiveNotification {
     }
 
     public void setFinished(String message) {
-        builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.DEFAULT);
+        builder = new NotificationCompat.Builder(device.getContext(), NotificationHelper.Channels.FILETRANSFER);
         builder.setContentTitle(message)
                 .setTicker(message)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)

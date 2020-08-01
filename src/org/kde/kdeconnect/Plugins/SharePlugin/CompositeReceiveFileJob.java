@@ -22,12 +22,18 @@ package org.kde.kdeconnect.Plugins.SharePlugin;
 
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 
+import androidx.annotation.GuardedBy;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
+import androidx.documentfile.provider.DocumentFile;
+
+import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.io.IOUtils;
 import org.kde.kdeconnect.Device;
 import org.kde.kdeconnect.Helpers.FilesHelper;
 import org.kde.kdeconnect.Helpers.MediaStoreHelper;
@@ -43,9 +49,23 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
-import androidx.core.content.FileProvider;
-import androidx.documentfile.provider.DocumentFile;
-
+/**
+ * A type of {@link BackgroundJob} that reads Files from another device.
+ *
+ * <p>
+ *     We receive the requests as {@link NetworkPacket}s.
+ * </p>
+ * <p>
+ *     Each packet should have a 'filename' property and a payload. If the payload is missing,
+ *     we'll just create an empty file. You can add new packets anytime via
+ *     {@link #addNetworkPacket(NetworkPacket)}.
+ * </p>
+ * <p>
+ *     The I/O-part of this file reading is handled by {@link #receiveFile(InputStream, OutputStream)}.
+ * </p>
+ *
+ * @see CompositeUploadFileJob
+ */
 public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
     private final ReceiveNotification receiveNotification;
     private NetworkPacket currentNetworkPacket;
@@ -56,8 +76,11 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
     private long prevProgressPercentage;
 
     private final Object lock;                              //Use to protect concurrent access to the variables below
+    @GuardedBy("lock")
     private final List<NetworkPacket> networkPacketList;
+    @GuardedBy("lock")
     private int totalNumFiles;
+    @GuardedBy("lock")
     private long totalPayloadSize;
     private boolean isRunning;
 
@@ -66,8 +89,7 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
 
         lock = new Object();
         networkPacketList = new ArrayList<>();
-        receiveNotification = new ReceiveNotification(device);
-        receiveNotification.addCancelAction(getId());
+        receiveNotification = new ReceiveNotification(device, getId());
         currentFileNum = 0;
         totalNumFiles = 0;
         totalPayloadSize = 0;
@@ -129,7 +151,7 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
 
                 setProgress((int)prevProgressPercentage);
 
-                fileDocument = getDocumentFileFor(currentFileName, currentNetworkPacket.getBoolean("open"));
+                fileDocument = getDocumentFileFor(currentFileName, currentNetworkPacket.getBoolean("open", false));
 
                 if (currentNetworkPacket.hasPayload()) {
                     outputStream = new BufferedOutputStream(getDevice().getContext().getContentResolver().openOutputStream(fileDocument.getUri()));
@@ -190,7 +212,7 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
                 numFiles = totalNumFiles;
             }
 
-            if (numFiles == 1 && currentNetworkPacket.has("open")) {
+            if (numFiles == 1 && currentNetworkPacket.getBoolean("open", false)) {
                 receiveNotification.cancel();
                 openFile(fileDocument);
             } else {
@@ -224,10 +246,9 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
         } finally {
             closeAllInputStreams();
             networkPacketList.clear();
-            if (outputStream != null) {
-                try {
-                    outputStream.close();
-                } catch (IOException ignored) {}
+            try {
+                IOUtils.close(outputStream);
+            } catch (IOException ignored) {
             }
         }
     }
@@ -247,7 +268,7 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
         } else {
             destinationFolderDocument = ShareSettingsFragment.getDestinationDirectory(getDevice().getContext());
         }
-        String displayName = FilesHelper.getFileNameWithoutExt(filenameToUse);
+        String displayName = FilenameUtils.getBaseName(filenameToUse);
         String mimeType = FilesHelper.getMimeTypeFromFile(filenameToUse);
 
         if ("*/*".equals(mimeType)) {
@@ -264,7 +285,7 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
     }
 
     private long receiveFile(InputStream input, OutputStream output) throws IOException {
-        byte data[] = new byte[4096];
+        byte[] data = new byte[4096];
         int count;
         long received = 0;
 
@@ -310,7 +331,8 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
     private void publishFile(DocumentFile fileDocument, long size) {
         if (!ShareSettingsFragment.isCustomDestinationEnabled(getDevice().getContext())) {
             Log.i("SharePlugin", "Adding to downloads");
-            DownloadManager manager = (DownloadManager) getDevice().getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+            DownloadManager manager = ContextCompat.getSystemService(getDevice().getContext(),
+                    DownloadManager.class);
             manager.addCompletedDownload(fileDocument.getUri().getLastPathSegment(), getDevice().getName(), true, fileDocument.getType(), fileDocument.getUri().getPath(), size, false);
         } else {
             //Make sure it is added to the Android Gallery anyway
@@ -330,6 +352,11 @@ public class CompositeReceiveFileJob extends BackgroundJob<Device, Void> {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
         } else {
             intent.setDataAndType(fileDocument.getUri(), mimeType);
+        }
+
+        // Open files for KDE Itinerary explicitly because Android's activity resolution sucks
+        if (fileDocument.getName().endsWith(".itinerary")) {
+            intent.setClassName("org.kde.itinerary", "org.kde.itinerary.Activity");
         }
 
         getDevice().getContext().startActivity(intent);

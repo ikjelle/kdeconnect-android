@@ -33,9 +33,18 @@ import android.preference.PreferenceManager;
 import android.util.Base64;
 import android.util.Log;
 
+import androidx.annotation.AnyThread;
+import androidx.annotation.Nullable;
+import androidx.annotation.WorkerThread;
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
+
+import org.apache.commons.collections4.MultiValuedMap;
+import org.apache.commons.collections4.multimap.ArrayListValuedHashMap;
+import org.apache.commons.lang3.StringUtils;
 import org.kde.kdeconnect.Backends.BaseLink;
 import org.kde.kdeconnect.Backends.BasePairingHandler;
-import org.kde.kdeconnect.Backends.LanBackend.LanLinkProvider;
+import org.kde.kdeconnect.Helpers.DeviceHelper;
 import org.kde.kdeconnect.Helpers.NotificationHelper;
 import org.kde.kdeconnect.Helpers.SecurityHelpers.SslHelper;
 import org.kde.kdeconnect.Plugins.Plugin;
@@ -45,13 +54,12 @@ import org.kde.kdeconnect_tp.R;
 
 import java.security.KeyFactory;
 import java.security.PrivateKey;
-import java.security.PublicKey;
 import java.security.cert.Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -59,16 +67,12 @@ import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import androidx.core.app.NotificationCompat;
-import androidx.core.content.ContextCompat;
-
 public class Device implements BaseLink.PacketReceiver {
 
     private final Context context;
 
     private final String deviceId;
     private String name;
-    public PublicKey publicKey;
     public Certificate certificate;
     private int notificationId;
     private int protocolVersion;
@@ -80,16 +84,26 @@ public class Device implements BaseLink.PacketReceiver {
     private final Map<String, BasePairingHandler> pairingHandlers = new HashMap<>();
 
     private final CopyOnWriteArrayList<BaseLink> links = new CopyOnWriteArrayList<>();
+    private DevicePacketQueue packetQueue;
 
-    private List<String> m_supportedPlugins = new ArrayList<>();
+    private List<String> supportedPlugins = new ArrayList<>();
     private final ConcurrentHashMap<String, Plugin> plugins = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Plugin> pluginsWithoutPermissions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Plugin> pluginsWithoutOptionalPermissions = new ConcurrentHashMap<>();
-    private Map<String, ArrayList<String>> pluginsByIncomingInterface = new HashMap<>();
+    private MultiValuedMap<String, String> pluginsByIncomingInterface = new ArrayListValuedHashMap<>();
 
     private final SharedPreferences settings;
 
     private final CopyOnWriteArrayList<PluginsChangedListener> pluginsChangedListeners = new CopyOnWriteArrayList<>();
+    private Set<String> incomingCapabilities = new HashSet<>();
+
+    public boolean supportsPacketType(String type) {
+        if (incomingCapabilities == null) {
+            return true;
+        } else {
+            return incomingCapabilities.contains(type);
+        }
+    }
 
     public interface PluginsChangedListener {
         void onPluginsChanged(Device device);
@@ -106,7 +120,7 @@ public class Device implements BaseLink.PacketReceiver {
         Computer,
         Tv;
 
-        static DeviceType FromString(String s) {
+        static public DeviceType FromString(String s) {
             if ("tablet".equals(s)) return Tablet;
             if ("phone".equals(s)) return Phone;
             if ("tv".equals(s)) return Tv;
@@ -147,21 +161,11 @@ public class Device implements BaseLink.PacketReceiver {
         this.deviceId = deviceId;
         this.name = settings.getString("deviceName", context.getString(R.string.unknown_device));
         this.pairStatus = PairStatus.Paired;
-        this.protocolVersion = NetworkPacket.ProtocolVersion; //We don't know it yet
+        this.protocolVersion = DeviceHelper.ProtocolVersion; //We don't know it yet
         this.deviceType = DeviceType.FromString(settings.getString("deviceType", "desktop"));
 
-        try {
-            String publicKeyStr = settings.getString("publicKey", null);
-            if (publicKeyStr != null) {
-                byte[] publicKeyBytes = Base64.decode(publicKeyStr, 0);
-                publicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(publicKeyBytes));
-            }
-        } catch (Exception e) {
-            Log.e("KDE/Device", "Exception deserializing stored public key for device", e);
-        }
-
         //Assume every plugin is supported until addLink is called and we can get the actual list
-        m_supportedPlugins = new Vector<>(PluginFactory.getAvailablePlugins());
+        supportedPlugins = new Vector<>(PluginFactory.getAvailablePlugins());
 
         //Do not load plugins yet, the device is not present
         //reloadPluginsFromSettings();
@@ -178,7 +182,6 @@ public class Device implements BaseLink.PacketReceiver {
         this.pairStatus = PairStatus.NotPaired;
         this.protocolVersion = 0;
         this.deviceType = DeviceType.Computer;
-        this.publicKey = null;
 
         settings = context.getSharedPreferences(deviceId, Context.MODE_PRIVATE);
 
@@ -186,23 +189,23 @@ public class Device implements BaseLink.PacketReceiver {
     }
 
     public String getName() {
-        return name != null ? name : context.getString(R.string.unknown_device);
+        return StringUtils.defaultString(name, context.getString(R.string.unknown_device));
     }
 
     public Drawable getIcon() {
         int drawableId;
         switch (deviceType) {
             case Phone:
-                drawableId = R.drawable.ic_device_phone;
+                drawableId = R.drawable.ic_device_phone_32dp;
                 break;
             case Tablet:
-                drawableId = R.drawable.ic_device_tablet;
+                drawableId = R.drawable.ic_device_tablet_32dp;
                 break;
             case Tv:
-                drawableId = R.drawable.ic_device_tv;
+                drawableId = R.drawable.ic_device_tv_32dp;
                 break;
             default:
-                drawableId = R.drawable.ic_device_laptop;
+                drawableId = R.drawable.ic_device_laptop_32dp;
         }
         return ContextCompat.getDrawable(context, drawableId);
     }
@@ -221,7 +224,7 @@ public class Device implements BaseLink.PacketReceiver {
 
     //Returns 0 if the version matches, < 0 if it is older or > 0 if it is newer
     public int compareProtocolVersion() {
-        return protocolVersion - NetworkPacket.ProtocolVersion;
+        return protocolVersion - DeviceHelper.ProtocolVersion;
     }
 
 
@@ -401,7 +404,7 @@ public class Device implements BaseLink.PacketReceiver {
 
         Resources res = getContext().getResources();
 
-        final NotificationManager notificationManager = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        final NotificationManager notificationManager = ContextCompat.getSystemService(getContext(), NotificationManager.class);
 
         Notification noti = new NotificationCompat.Builder(getContext(), NotificationHelper.Channels.DEFAULT)
                 .setContentTitle(res.getString(R.string.pairing_request_from, getName()))
@@ -409,21 +412,19 @@ public class Device implements BaseLink.PacketReceiver {
                 .setContentIntent(pendingIntent)
                 .setTicker(res.getString(R.string.pair_requested))
                 .setSmallIcon(R.drawable.ic_notification)
-                .addAction(R.drawable.ic_accept_pairing, res.getString(R.string.pairing_accept), acceptedPendingIntent)
-                .addAction(R.drawable.ic_reject_pairing, res.getString(R.string.pairing_reject), rejectedPendingIntent)
+                .addAction(R.drawable.ic_accept_pairing_24dp, res.getString(R.string.pairing_accept), acceptedPendingIntent)
+                .addAction(R.drawable.ic_reject_pairing_24dp, res.getString(R.string.pairing_reject), rejectedPendingIntent)
                 .setAutoCancel(true)
                 .setDefaults(Notification.DEFAULT_ALL)
                 .build();
 
         NotificationHelper.notifyCompat(notificationManager, notificationId, noti);
-
-        BackgroundService.addGuiInUseCounter(context);
     }
 
     public void hidePairingNotification() {
-        final NotificationManager notificationManager = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        final NotificationManager notificationManager = ContextCompat.getSystemService(getContext(),
+                NotificationManager.class);
         notificationManager.cancel(notificationId);
-        BackgroundService.removeGuiInUseCounter(context);
     }
 
     //
@@ -435,7 +436,12 @@ public class Device implements BaseLink.PacketReceiver {
     }
 
     public void addLink(NetworkPacket identityPacket, BaseLink link) {
+        if (links.isEmpty()) {
+            packetQueue = new DevicePacketQueue(this);
+        }
         //FilesHelper.LogOpenFileCount();
+        links.add(link);
+        link.addPacketReceiver(this);
 
         this.protocolVersion = identityPacket.getInt("protocolVersion");
 
@@ -462,9 +468,6 @@ public class Device implements BaseLink.PacketReceiver {
 
             }
         }
-
-
-        links.add(link);
 
         try {
             SharedPreferences globalSettings = PreferenceManager.getDefaultSharedPreferences(context);
@@ -508,13 +511,14 @@ public class Device implements BaseLink.PacketReceiver {
 
         Set<String> outgoingCapabilities = identityPacket.getStringSet("outgoingCapabilities", null);
         Set<String> incomingCapabilities = identityPacket.getStringSet("incomingCapabilities", null);
-        if (incomingCapabilities != null && outgoingCapabilities != null) {
-            m_supportedPlugins = new Vector<>(PluginFactory.pluginsForCapabilities(incomingCapabilities, outgoingCapabilities));
-        } else {
-            m_supportedPlugins = new Vector<>(PluginFactory.getAvailablePlugins());
-        }
 
-        link.addPacketReceiver(this);
+
+        if (incomingCapabilities != null && outgoingCapabilities != null) {
+            supportedPlugins = new Vector<>(PluginFactory.pluginsForCapabilities(incomingCapabilities, outgoingCapabilities));
+        } else {
+            supportedPlugins = new Vector<>(PluginFactory.getAvailablePlugins());
+        }
+        this.incomingCapabilities = incomingCapabilities;
 
         reloadPluginsFromSettings();
 
@@ -540,13 +544,15 @@ public class Device implements BaseLink.PacketReceiver {
         Log.i("KDE/Device", "removeLink: " + link.getLinkProvider().getName() + " -> " + getName() + " active links: " + links.size());
         if (links.isEmpty()) {
             reloadPluginsFromSettings();
+            if (packetQueue != null) {
+                packetQueue.disconnected();
+                packetQueue = null;
+            }
         }
     }
 
     @Override
     public void onPacketReceived(NetworkPacket np) {
-
-        hackToMakeRetrocompatiblePacketTypes(np);
 
         if (NetworkPacket.PACKET_TYPE_PAIR.equals(np.getType())) {
 
@@ -560,7 +566,6 @@ public class Device implements BaseLink.PacketReceiver {
                 }
             }
         } else if (isPaired()) {
-
             // pluginsByIncomingInterface may not be built yet
             if(pluginsByIncomingInterface.isEmpty()) {
                 reloadPluginsFromSettings();
@@ -568,7 +573,7 @@ public class Device implements BaseLink.PacketReceiver {
 
             //If capabilities are not supported, iterate all plugins
             Collection<String> targetPlugins = pluginsByIncomingInterface.get(np.getType());
-            if (targetPlugins != null && !targetPlugins.isEmpty()) {
+            if (!targetPlugins.isEmpty()) {
                 for (String pluginKey : targetPlugins) {
                     Plugin plugin = plugins.get(pluginKey);
                     try {
@@ -591,9 +596,11 @@ public class Device implements BaseLink.PacketReceiver {
 
             unpair();
 
-            //If capabilities are not supported, iterate all plugins
+            //If capabilities are not supported, iterate through all plugins.
             Collection<String> targetPlugins = pluginsByIncomingInterface.get(np.getType());
-            if (targetPlugins != null && !targetPlugins.isEmpty()) {
+            // When a mapping doesn't exist, an empty collection is added to the map and
+            // then returned, so a null check is not necessary.
+            if (!targetPlugins.isEmpty()) {
                 for (String pluginKey : targetPlugins) {
                     Plugin plugin = plugins.get(pluginKey);
                     try {
@@ -606,7 +613,6 @@ public class Device implements BaseLink.PacketReceiver {
                 Log.e("Device", "Ignoring packet with type " + np.getType() + " because no plugin can handle it");
             }
         }
-
     }
 
     public static abstract class SendPacketStatusCallback {
@@ -629,19 +635,64 @@ public class Device implements BaseLink.PacketReceiver {
         }
     };
 
+    @AnyThread
     public void sendPacket(NetworkPacket np) {
-        sendPacket(np, defaultCallback);
+        sendPacket(np, -1, defaultCallback);
     }
 
+    @AnyThread
+    public void sendPacket(NetworkPacket np, int replaceID) {
+        sendPacket(np, replaceID, defaultCallback);
+    }
+
+    @WorkerThread
     public boolean sendPacketBlocking(NetworkPacket np) {
         return sendPacketBlocking(np, defaultCallback);
     }
 
-    //Async
+    @AnyThread
     public void sendPacket(final NetworkPacket np, final SendPacketStatusCallback callback) {
-        new Thread(() -> sendPacketBlocking(np, callback)).start();
+        sendPacket(np, -1, callback);
     }
 
+    /**
+     * Send a packet to the device asynchronously
+     * @param np The packet
+     * @param replaceID If positive, replaces all unsent packages with the same replaceID
+     * @param callback A callback for success/failure
+     */
+    @AnyThread
+    public void sendPacket(final NetworkPacket np, int replaceID, final SendPacketStatusCallback callback) {
+        if (packetQueue == null) {
+            callback.onFailure(new Exception("Device disconnected!"));
+        } else {
+            packetQueue.addPacket(np, replaceID, callback);
+        }
+    }
+
+    /**
+     * Check if we still have an unsent packet in the queue with the given ID.
+     * If so, remove it from the queue and return it
+     * @param replaceID The replace ID (must be positive)
+     * @return The found packet, or null
+     */
+    public NetworkPacket getAndRemoveUnsentPacket(int replaceID) {
+        if (packetQueue == null) {
+            return null;
+        } else {
+            return packetQueue.getAndRemoveUnsentPacket(replaceID);
+        }
+    }
+
+    /**
+     * Send {@code np} over one of this device's connected {@link #links}.
+     *
+     * @param np       the packet to send
+     * @param callback a callback that can receive realtime updates
+     * @return true if the packet was sent ok, false otherwise
+     * @see BaseLink#sendPacket(NetworkPacket, SendPacketStatusCallback)
+     */
+    @WorkerThread
     public boolean sendPacketBlocking(final NetworkPacket np, final SendPacketStatusCallback callback) {
 
         /*
@@ -651,20 +702,12 @@ public class Device implements BaseLink.PacketReceiver {
         }
         */
 
-        hackToMakeRetrocompatiblePacketTypes(np);
-
-        boolean useEncryption = (protocolVersion < LanLinkProvider.MIN_VERSION_WITH_SSL_SUPPORT && (!np.getType().equals(NetworkPacket.PACKET_TYPE_PAIR) && isPaired()));
-
         boolean success = false;
         //Make a copy to avoid concurrent modification exception if the original list changes
         for (final BaseLink link : links) {
             if (link == null)
                 continue; //Since we made a copy, maybe somebody destroyed the link in the meanwhile
-            if (useEncryption) {
-                success = link.sendPacketEncrypted(np, callback, publicKey);
-            } else {
-                success = link.sendPacket(np, callback);
-            }
+            success = link.sendPacket(np, callback);
             if (success) break; //If the link didn't call sendSuccess(), try the next one
         }
 
@@ -679,11 +722,13 @@ public class Device implements BaseLink.PacketReceiver {
     // Plugin-related functions
     //
 
+    @Nullable
     public <T extends Plugin> T getPlugin(Class<T> pluginClass) {
         Plugin plugin = getPlugin(Plugin.getPluginKey(pluginClass));
         return (T) plugin;
     }
 
+    @Nullable
     public Plugin getPlugin(String pluginKey) {
         return plugins.get(pluginKey);
     }
@@ -779,11 +824,9 @@ public class Device implements BaseLink.PacketReceiver {
     }
 
     public void reloadPluginsFromSettings() {
+        MultiValuedMap<String, String> newPluginsByIncomingInterface = new ArrayListValuedHashMap<>();
 
-        HashMap<String, ArrayList<String>> newPluginsByIncomingInterface = new HashMap<>();
-
-        for (String pluginKey : m_supportedPlugins) {
-
+        for (String pluginKey : supportedPlugins) {
             PluginFactory.PluginInfo pluginInfo = PluginFactory.getPluginInfo(pluginKey);
 
             boolean pluginEnabled = false;
@@ -796,17 +839,14 @@ public class Device implements BaseLink.PacketReceiver {
                 boolean success = addPlugin(pluginKey);
                 if (success) {
                     for (String packageType : pluginInfo.getSupportedPacketTypes()) {
-                        packageType = hackToMakeRetrocompatiblePacketTypes(packageType);
-                        ArrayList<String> plugins = newPluginsByIncomingInterface.get(packageType);
-                        if (plugins == null) plugins = new ArrayList<>();
-                        plugins.add(pluginKey);
-                        newPluginsByIncomingInterface.put(packageType, plugins);
+                        newPluginsByIncomingInterface.put(packageType, pluginKey);
                     }
+                } else {
+                    removePlugin(pluginKey);
                 }
             } else {
                 removePlugin(pluginKey);
             }
-
         }
 
         pluginsByIncomingInterface = newPluginsByIncomingInterface;
@@ -863,17 +903,7 @@ public class Device implements BaseLink.PacketReceiver {
     }
 
     public List<String> getSupportedPlugins() {
-        return m_supportedPlugins;
-    }
-
-    private void hackToMakeRetrocompatiblePacketTypes(NetworkPacket np) {
-        if (protocolVersion >= 6) return;
-        np.mType = np.getType().replace(".request", "");
-    }
-
-    private String hackToMakeRetrocompatiblePacketTypes(String type) {
-        if (protocolVersion >= 6) return type;
-        return type.replace(".request", "");
+        return supportedPlugins;
     }
 
 }

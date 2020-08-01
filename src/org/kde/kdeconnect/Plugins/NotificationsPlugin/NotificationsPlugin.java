@@ -35,17 +35,30 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Parcelable;
 import android.provider.Settings;
 import android.service.notification.StatusBarNotification;
 import android.text.SpannableString;
+import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.core.app.NotificationCompat;
+import androidx.fragment.app.DialogFragment;
+
+import org.apache.commons.collections4.MultiValuedMap;
+import org.apache.commons.collections4.multimap.ArrayListValuedHashMap;
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.json.JSONArray;
 import org.kde.kdeconnect.Helpers.AppsHelper;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
 import org.kde.kdeconnect.Plugins.PluginFactory;
-import org.kde.kdeconnect.UserInterface.AlertDialogFragment;
+import org.kde.kdeconnect.UserInterface.MainActivity;
 import org.kde.kdeconnect.UserInterface.PluginSettingsFragment;
 import org.kde.kdeconnect.UserInterface.StartActivityAlertDialogFragment;
 import org.kde.kdeconnect_tp.R;
@@ -56,13 +69,9 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-
-import androidx.annotation.RequiresApi;
-import androidx.core.app.NotificationCompat;
 
 @TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
 @PluginFactory.LoadablePlugin
@@ -73,13 +82,13 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
     private final static String PACKET_TYPE_NOTIFICATION_REPLY = "kdeconnect.notification.reply";
     private final static String PACKET_TYPE_NOTIFICATION_ACTION = "kdeconnect.notification.action";
 
-    private final static String TAG = "NotificationsPlugin";
+    private final static String TAG = "KDE/NotificationsPlugin";
 
     private AppDatabase appDatabase;
 
     private Set<String> currentNotifications;
     private Map<String, RepliableNotification> pendingIntents;
-    private Map<String, List<Notification.Action>> actions;
+    private MultiValuedMap<String, Notification.Action> actions;
     private boolean serviceReady;
 
     @Override
@@ -114,7 +123,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
 
     private boolean hasPermission() {
         String notificationListenerList = Settings.Secure.getString(context.getContentResolver(), "enabled_notification_listeners");
-        return (notificationListenerList != null && notificationListenerList.contains(context.getPackageName()));
+        return StringUtils.contains(notificationListenerList, context.getPackageName());
     }
 
     @Override
@@ -124,7 +133,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
 
         pendingIntents = new HashMap<>();
         currentNotifications = new HashSet<>();
-        actions = new HashMap<>();
+        actions = new ArrayListValuedHashMap<>();
 
         appDatabase = new AppDatabase(context, true);
 
@@ -133,10 +142,6 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
             service.addListener(NotificationsPlugin.this);
 
             serviceReady = service.isConnected();
-
-            if (serviceReady) {
-                sendCurrentNotifications(service);
-            }
         });
 
         return true;
@@ -151,13 +156,12 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
     @Override
     public void onListenerConnected(NotificationReceiver service) {
         serviceReady = true;
-        sendCurrentNotifications(service);
     }
 
     @Override
     public void onNotificationRemoved(StatusBarNotification statusBarNotification) {
         if (statusBarNotification == null) {
-            Log.w("onNotificationRemoved", "notification is null");
+            Log.w(TAG, "onNotificationRemoved: notification is null");
             return;
         }
         String id = getNotificationKeyCompat(statusBarNotification);
@@ -183,7 +187,8 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         if ((notification.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0
                 || (notification.flags & Notification.FLAG_ONGOING_EVENT) != 0
                 || (notification.flags & Notification.FLAG_LOCAL_ONLY) != 0
-                || (notification.flags & NotificationCompat.FLAG_GROUP_SUMMARY) != 0) //The notification that groups other notifications
+                || (notification.flags & NotificationCompat.FLAG_GROUP_SUMMARY) != 0 //The notification that groups other notifications
+        )
         {
             //This is not a notification we want!
             return;
@@ -191,7 +196,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
 
         if (!appDatabase.isEnabled(statusBarNotification.getPackageName())) {
             return;
-            // we dont want notification from this app
+            // we don't want notification from this app
         }
 
         String key = getNotificationKeyCompat(statusBarNotification);
@@ -221,77 +226,160 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         NetworkPacket np = new NetworkPacket(PACKET_TYPE_NOTIFICATION);
 
         boolean isUpdate = currentNotifications.contains(key);
+        //If it's an update, the other end should have the icon already: no need to extract it and create the payload again
         if (!isUpdate) {
-            //If it's an update, the other end should have the icon already: no need to extract it and create the payload again
-            try {
-                Bitmap appIcon;
-                Context foreignContext = context.createPackageContext(statusBarNotification.getPackageName(), 0);
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    appIcon = iconToBitmap(foreignContext, notification.getLargeIcon());
-                } else {
-                    appIcon = notification.largeIcon;
-                }
 
-                if (appIcon == null) {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                        appIcon = iconToBitmap(foreignContext, notification.getSmallIcon());
-                    } else {
-                        PackageManager pm = context.getPackageManager();
-                        Resources foreignResources = pm.getResourcesForApplication(statusBarNotification.getPackageName());
-                        Drawable foreignIcon = foreignResources.getDrawable(notification.icon);
-                        appIcon = drawableToBitmap(foreignIcon);
-                    }
-                }
-
-                if (appIcon != null && !appDatabase.getPrivacy(packageName, AppDatabase.PrivacyOptions.BLOCK_IMAGES)) {
-
-                    ByteArrayOutputStream outStream = new ByteArrayOutputStream();
-                    appIcon.compress(Bitmap.CompressFormat.PNG, 90, outStream);
-                    byte[] bitmapData = outStream.toByteArray();
-
-                    Log.e("PAYLOAD", "PAYLOAD: " + getChecksum(bitmapData));
-
-                    np.setPayload(new NetworkPacket.Payload(bitmapData));
-
-                    np.set("payloadHash", getChecksum(bitmapData));
-                }
-            } catch (Exception e) {
-                Log.e("NotificationsPlugin", "Error retrieving icon", e);
-            }
-        } else {
             currentNotifications.add(key);
-        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            if (notification.actions != null && notification.actions.length > 0) {
-                actions.put(key, new LinkedList<>());
-                JSONArray jsonArray = new JSONArray();
-                for (Notification.Action action : notification.actions) {
-                    if (null == action.title || (action.getRemoteInputs() != null && action.getRemoteInputs().length > 0))
-                        continue;
-                    jsonArray.put(action.title.toString());
-                    actions.get(key).add(action);
-                }
-                np.set("actions", jsonArray);
+            Bitmap appIcon = extractIcon(statusBarNotification, notification);
+
+            if (appIcon != null && !appDatabase.getPrivacy(packageName, AppDatabase.PrivacyOptions.BLOCK_IMAGES)) {
+                attachIcon(np, appIcon);
             }
         }
+
+        np.set("actions", extractActions(notification, key));
 
         np.set("id", key);
+        np.set("onlyOnce", (notification.flags & NotificationCompat.FLAG_ONLY_ALERT_ONCE) != 0);
         np.set("isClearable", statusBarNotification.isClearable());
-        np.set("appName", appName == null ? packageName : appName);
+        np.set("appName", StringUtils.defaultString(appName, packageName));
         np.set("time", Long.toString(statusBarNotification.getPostTime()));
+
         if (!appDatabase.getPrivacy(packageName, AppDatabase.PrivacyOptions.BLOCK_CONTENTS)) {
             RepliableNotification rn = extractRepliableNotification(statusBarNotification);
-            if (rn.pendingIntent != null) {
+            if (rn != null) {
                 np.set("requestReplyId", rn.id);
                 pendingIntents.put(rn.id, rn);
             }
             np.set("ticker", getTickerText(notification));
-            np.set("title", getNotificationTitle(notification));
-            np.set("text", getNotificationText(notification));
+
+            Pair<String, String> conversation = extractConversation(notification);
+
+            if (conversation.first != null) {
+                np.set("title", conversation.first);
+            } else {
+                np.set("title", extractStringFromExtra(getExtras(notification), NotificationCompat.EXTRA_TITLE));
+            }
+
+            np.set("text", extractText(notification, conversation));
         }
 
         device.sendPacket(np);
+    }
+
+    private String extractText(Notification notification, Pair<String, String> conversation) {
+
+        if (conversation.second != null) {
+            return conversation.second;
+        }
+
+        Bundle extras = getExtras(notification);
+
+        if (extras.containsKey(NotificationCompat.EXTRA_BIG_TEXT)) {
+            return extractStringFromExtra(extras, NotificationCompat.EXTRA_BIG_TEXT);
+        }
+
+        return extractStringFromExtra(extras, NotificationCompat.EXTRA_TEXT);
+    }
+
+    @NonNull
+    @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN)
+    private static Bundle getExtras(Notification notification) {
+        // NotificationCompat.getExtras() is expected to return non-null values for JELLY_BEAN+
+        return Objects.requireNonNull(NotificationCompat.getExtras(notification));
+    }
+
+    private void attachIcon(NetworkPacket np, Bitmap appIcon) {
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+        appIcon.compress(Bitmap.CompressFormat.PNG, 90, outStream);
+        byte[] bitmapData = outStream.toByteArray();
+
+        np.setPayload(new NetworkPacket.Payload(bitmapData));
+        np.set("payloadHash", getChecksum(bitmapData));
+    }
+
+    @Nullable
+    private Bitmap extractIcon(StatusBarNotification statusBarNotification, Notification notification) {
+        try {
+            Context foreignContext = context.createPackageContext(statusBarNotification.getPackageName(), 0);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && notification.getLargeIcon() != null) {
+                return iconToBitmap(foreignContext, notification.getLargeIcon());
+            } else if (notification.largeIcon != null) {
+                return notification.largeIcon;
+            }
+
+            PackageManager pm = context.getPackageManager();
+            Resources foreignResources = pm.getResourcesForApplication(statusBarNotification.getPackageName());
+            Drawable foreignIcon = foreignResources.getDrawable(notification.icon); //Might throw Resources.NotFoundException
+            return drawableToBitmap(foreignIcon);
+
+        } catch (PackageManager.NameNotFoundException | Resources.NotFoundException e) {
+            Log.e(TAG, "Package not found", e);
+        }
+
+        return null;
+    }
+
+    @Nullable
+    private JSONArray extractActions(Notification notification, String key) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT || ArrayUtils.isEmpty(notification.actions)) {
+            return null;
+        }
+
+        JSONArray jsonArray = new JSONArray();
+
+        for (Notification.Action action : notification.actions) {
+
+            if (null == action.title)
+                continue;
+
+            // Check whether it is a reply action. We have special treatment for them
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH &&
+                    ArrayUtils.isNotEmpty(action.getRemoteInputs()))
+                continue;
+
+            jsonArray.put(action.title.toString());
+
+            // A list is automatically created if it doesn't already exist.
+            actions.put(key, action);
+        }
+
+        return jsonArray;
+    }
+
+    private Pair<String, String> extractConversation(Notification notification) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N)
+            return new Pair<>(null, null);
+
+        if (!notification.extras.containsKey(Notification.EXTRA_MESSAGES))
+            return new Pair<>(null, null);
+
+        Parcelable[] ms = notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+
+        if (ms == null)
+            return new Pair<>(null, null);
+
+        String title = notification.extras.getString(Notification.EXTRA_CONVERSATION_TITLE);
+
+        boolean isGroupConversation = notification.extras.getBoolean(NotificationCompat.EXTRA_IS_GROUP_CONVERSATION);
+
+        StringBuilder messagesBuilder = new StringBuilder();
+
+        for (Parcelable p : ms) {
+            Bundle m = (Bundle) p;
+
+            if (isGroupConversation && m.containsKey("sender")) {
+                messagesBuilder.append(m.get("sender"));
+                messagesBuilder.append(": ");
+            }
+
+            messagesBuilder.append(extractStringFromExtra(m, "text"));
+            messagesBuilder.append("\n");
+        }
+
+        return new Pair<>(title, messagesBuilder.toString());
     }
 
     private Bitmap drawableToBitmap(Drawable drawable) {
@@ -322,13 +410,13 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
     @RequiresApi(api = Build.VERSION_CODES.KITKAT_WATCH)
     private void replyToNotification(String id, String message) {
         if (pendingIntents.isEmpty() || !pendingIntents.containsKey(id)) {
-            Log.e("NotificationsPlugin", "No such notification");
+            Log.e(TAG, "No such notification");
             return;
         }
 
         RepliableNotification repliableNotification = pendingIntents.get(id);
         if (repliableNotification == null) {
-            Log.e("NotificationsPlugin", "No such notification");
+            Log.e(TAG, "No such notification");
             return;
         }
         RemoteInput[] remoteInputs = new RemoteInput[repliableNotification.remoteInputs.size()];
@@ -338,7 +426,6 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         Bundle localBundle = new Bundle();
         int i = 0;
         for (RemoteInput remoteIn : repliableNotification.remoteInputs) {
-            getDetailsOfNotification(remoteIn);
             remoteInputs[i] = remoteIn;
             localBundle.putCharSequence(remoteInputs[i].getResultKey(), message);
             i++;
@@ -348,90 +435,37 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         try {
             repliableNotification.pendingIntent.send(context, 0, localIntent);
         } catch (PendingIntent.CanceledException e) {
-            Log.e("NotificationPlugin", "replyToNotification error: " + e.getMessage());
+            Log.e(TAG, "replyToNotification error: " + e.getMessage());
         }
         pendingIntents.remove(id);
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.KITKAT_WATCH)
-    private void getDetailsOfNotification(RemoteInput remoteInput) {
-        //Some more details of RemoteInput... no idea what for but maybe it will be useful at some point
-        String resultKey = remoteInput.getResultKey();
-        String label = remoteInput.getLabel().toString();
-        Boolean canFreeForm = remoteInput.getAllowFreeFormInput();
-        if (remoteInput.getChoices() != null && remoteInput.getChoices().length > 0) {
-            String[] possibleChoices = new String[remoteInput.getChoices().length];
-            for (int i = 0; i < remoteInput.getChoices().length; i++) {
-                possibleChoices[i] = remoteInput.getChoices()[i].toString();
-            }
-        }
-    }
-
-    private String getNotificationTitle(Notification notification) {
-        final String TITLE_KEY = "android.title";
-        final String TEXT_KEY = "android.text";
-        String title = "";
-
-        if (notification != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                try {
-                    Bundle extras = notification.extras;
-                    title = extractStringFromExtra(extras, TITLE_KEY);
-                } catch (Exception e) {
-                    Log.e("NotificationPlugin", "problem parsing notification extras for " + notification.tickerText, e);
-                }
-            }
-        }
-
-        return title;
-    }
-
+    @Nullable
     private RepliableNotification extractRepliableNotification(StatusBarNotification statusBarNotification) {
-        RepliableNotification repliableNotification = new RepliableNotification();
 
-        if (statusBarNotification != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                try {
-                    if (statusBarNotification.getNotification().actions != null) {
-                        for (Notification.Action act : statusBarNotification.getNotification().actions) {
-                            if (act != null && act.getRemoteInputs() != null) {
-                                // Is a reply
-                                repliableNotification.remoteInputs.addAll(Arrays.asList(act.getRemoteInputs()));
-                                repliableNotification.pendingIntent = act.actionIntent;
-                                break;
-                            }
-                        }
-                        repliableNotification.packageName = statusBarNotification.getPackageName();
-                        repliableNotification.tag = statusBarNotification.getTag();//TODO find how to pass Tag with sending PendingIntent, might fix Hangout problem
-                    }
-                } catch (Exception e) {
-                    Log.e("NotificationPlugin", "problem extracting notification wear for " + statusBarNotification.getNotification().tickerText, e);
-                }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return null;
+        }
+
+        if (statusBarNotification.getNotification().actions == null) {
+            return null;
+        }
+
+        for (Notification.Action act : statusBarNotification.getNotification().actions) {
+            if (act != null && act.getRemoteInputs() != null) {
+                // Is a reply
+                RepliableNotification repliableNotification = new RepliableNotification();
+                repliableNotification.remoteInputs.addAll(Arrays.asList(act.getRemoteInputs()));
+                repliableNotification.pendingIntent = act.actionIntent;
+                repliableNotification.packageName = statusBarNotification.getPackageName();
+                repliableNotification.tag = statusBarNotification.getTag(); //TODO find how to pass Tag with sending PendingIntent, might fix Hangout problem
+
+                return repliableNotification;
             }
         }
 
-        return repliableNotification;
+        return null;
     }
-
-    private String getNotificationText(Notification notification) {
-        final String TEXT_KEY = "android.text";
-        String text = "";
-
-        if (notification != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                try {
-                    Bundle extras = notification.extras;
-                    Object extraTextExtra = extras.get(TEXT_KEY);
-                    if (extraTextExtra != null) text = extraTextExtra.toString();
-                } catch (Exception e) {
-                    Log.e("NotificationPlugin", "problem parsing notification extras for " + notification.tickerText, e);
-                }
-            }
-        }
-
-        return text;
-    }
-
 
     private static String extractStringFromExtra(Bundle extras, String key) {
         Object extra = extras.get(key);
@@ -442,7 +476,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         } else if (extra instanceof SpannableString) {
             return extra.toString();
         } else {
-            Log.e("NotificationsPlugin", "Don't know how to extract text from extra of type: " + extra.getClass().getCanonicalName());
+            Log.e(TAG, "Don't know how to extract text from extra of type: " + extra.getClass().getCanonicalName());
             return null;
         }
     }
@@ -453,32 +487,26 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
      * instead the ticker text.
      */
     private String getTickerText(Notification notification) {
-        final String TITLE_KEY = "android.title";
-        final String TEXT_KEY = "android.text";
         String ticker = "";
 
-        if (notification != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                try {
-                    Bundle extras = notification.extras;
-                    String extraTitle = extractStringFromExtra(extras, TITLE_KEY);
-                    String extraText = extractStringFromExtra(extras, TEXT_KEY);
+        try {
+            Bundle extras = getExtras(notification);
+            String extraTitle = extractStringFromExtra(extras, NotificationCompat.EXTRA_TITLE);
+            String extraText = extractStringFromExtra(extras, NotificationCompat.EXTRA_TEXT);
 
-                    if (extraTitle != null && extraText != null && !extraText.isEmpty()) {
-                        ticker = extraTitle + ": " + extraText;
-                    } else if (extraTitle != null) {
-                        ticker = extraTitle;
-                    } else if (extraText != null) {
-                        ticker = extraText;
-                    }
-                } catch (Exception e) {
-                    Log.e("NotificationPlugin", "problem parsing notification extras for " + notification.tickerText, e);
-                }
+            if (extraTitle != null && !TextUtils.isEmpty(extraText)) {
+                ticker = extraTitle + ": " + extraText;
+            } else if (extraTitle != null) {
+                ticker = extraTitle;
+            } else if (extraText != null) {
+                ticker = extraText;
             }
+        } catch (Exception e) {
+            Log.e(TAG, "problem parsing notification extras for " + notification.tickerText, e);
+        }
 
-            if (ticker.isEmpty()) {
-                ticker = (notification.tickerText != null) ? notification.tickerText.toString() : "";
-            }
+        if (ticker.isEmpty()) {
+            ticker = (notification.tickerText != null) ? notification.tickerText.toString() : "";
         }
 
         return ticker;
@@ -538,7 +566,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
     }
 
     @Override
-    public AlertDialogFragment getPermissionExplanationDialog(int requestCode) {
+    public DialogFragment getPermissionExplanationDialog() {
         return new StartActivityAlertDialogFragment.Builder()
                 .setTitle(R.string.pref_plugin_notifications)
                 .setMessage(R.string.no_permissions)
@@ -546,7 +574,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
                 .setNegativeButton(R.string.cancel)
                 .setIntentAction("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                 .setStartForResult(true)
-                .setRequestCode(requestCode)
+                .setRequestCode(MainActivity.RESULT_NEEDS_RELOAD)
                 .create();
     }
 
@@ -562,12 +590,12 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
 
     //For compat with API<21, because lollipop changed the way to cancel notifications
     private static void cancelNotificationCompat(NotificationReceiver service, String compatKey) {
-        if (Build.VERSION.SDK_INT >= 21) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             service.cancelNotification(compatKey);
         } else {
             int first = compatKey.indexOf(':');
             if (first == -1) {
-                Log.e("cancelNotificationCompa", "Not formatted like a notification key: " + compatKey);
+                Log.e(TAG, "Not formatted like a notification key: " + compatKey);
                 return;
             }
             int last = compatKey.lastIndexOf(':');
@@ -589,16 +617,15 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
         String result;
         // first check if it's one of our remoteIds
         String tag = statusBarNotification.getTag();
-        if (tag != null && tag.startsWith("kdeconnectId:"))
+        if (StringUtils.startsWith(tag, "kdeconnectId:"))
             result = Integer.toString(statusBarNotification.getId());
-        else if (Build.VERSION.SDK_INT >= 21) {
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             result = statusBarNotification.getKey();
         } else {
             String packageName = statusBarNotification.getPackageName();
             int id = statusBarNotification.getId();
-            String safePackageName = (packageName == null) ? "" : packageName;
-            String safeTag = (tag == null) ? "" : tag;
-            result = safePackageName + ":" + safeTag + ":" + id;
+            result = StringUtils.defaultString(packageName) + ":" + StringUtils.defaultString(tag) +
+                    ":" + id;
         }
         return result;
     }
@@ -610,7 +637,7 @@ public class NotificationsPlugin extends Plugin implements NotificationReceiver.
             md.update(data);
             return bytesToHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
-            Log.e("KDEConnect", "Error while generating checksum", e);
+            Log.e(TAG, "Error while generating checksum", e);
         }
         return null;
     }

@@ -32,8 +32,10 @@ import android.os.Build;
 import android.preference.PreferenceManager;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.util.Log;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.kde.kdeconnect.Helpers.ContactsHelper;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.Plugin;
@@ -123,10 +125,9 @@ public class TelephonyPlugin extends Plugin {
                     return;
                 String number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER);
 
-                final int finalIntState = intState;
-
-                if (finalIntState != lastState) {
-                    callBroadcastReceived(finalIntState, number);
+                if (intState != lastState) {
+                    lastState = intState;
+                    callBroadcastReceived(intState, number);
                 }
             }
         }
@@ -165,7 +166,7 @@ public class TelephonyPlugin extends Plugin {
                 if (photoUri != null) {
                     try {
                         String base64photo = ContactsHelper.photoId64Encoded(context, photoUri);
-                        if (base64photo != null && !base64photo.isEmpty()) {
+                        if (!TextUtils.isEmpty(base64photo)) {
                             np.set("phoneThumbnail", base64photo);
                         }
                     } catch (Exception e) {
@@ -213,7 +214,7 @@ public class TelephonyPlugin extends Plugin {
                     }
 
                     //Emit a missed call notification if needed
-                    if (lastState == TelephonyManager.CALL_STATE_RINGING) {
+                    if ("ringing".equals(lastPacket.getString("event", null))) {
                         np.set("event", "missedCall");
                         np.set("phoneNumber", lastPacket.getString("phoneNumber", null));
                         np.set("contactName", lastPacket.getString("contactName", null));
@@ -224,12 +225,11 @@ public class TelephonyPlugin extends Plugin {
         }
 
         lastPacket = np;
-        lastState = state;
     }
 
     private void unmuteRinger() {
         if (isMuted) {
-            AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            AudioManager am = ContextCompat.getSystemService(context, AudioManager.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 am.setStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, 0);
             } else {
@@ -241,7 +241,7 @@ public class TelephonyPlugin extends Plugin {
 
     private void muteRinger() {
         if (!isMuted) {
-            AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            AudioManager am = ContextCompat.getSystemService(context, AudioManager.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 am.setStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_MUTE, 0);
             } else {
@@ -317,7 +317,7 @@ public class TelephonyPlugin extends Plugin {
                     Manifest.permission.READ_CALL_LOG,
             };
         } else {
-            return new String[0];
+            return ArrayUtils.EMPTY_STRING_ARRAY;
         }
     }
 

@@ -20,7 +20,6 @@
 
 package org.kde.kdeconnect.Plugins.MousePadPlugin;
 
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
@@ -34,11 +33,12 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+
 import org.kde.kdeconnect.BackgroundService;
 import org.kde.kdeconnect.UserInterface.ThemeUtil;
 import org.kde.kdeconnect_tp.R;
-
-import androidx.appcompat.app.AppCompatActivity;
 
 public class MousePadActivity extends AppCompatActivity implements GestureDetector.OnGestureListener, GestureDetector.OnDoubleTapListener, MousePadGestureDetector.OnGestureListener {
     private String deviceId;
@@ -173,6 +173,13 @@ public class MousePadActivity extends AppCompatActivity implements GestureDetect
     public boolean onCreateOptionsMenu(Menu menu) {
         MenuInflater inflater = getMenuInflater();
         inflater.inflate(R.menu.menu_mousepad, menu);
+
+        BackgroundService.RunWithPlugin(this, deviceId, MousePadPlugin.class, plugin -> {
+            if (!plugin.isKeyboardEnabled()) {
+                menu.removeItem(R.id.menu_show_keyboard);
+            }
+        });
+
         return true;
     }
 
@@ -361,21 +368,9 @@ public class MousePadActivity extends AppCompatActivity implements GestureDetect
 
     //TODO: Does not work on KitKat with or without requestFocus()
     private void showKeyboard() {
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        InputMethodManager imm = ContextCompat.getSystemService(this, InputMethodManager.class);
         keyListenerView.requestFocus();
         imm.toggleSoftInputFromWindow(keyListenerView.getWindowToken(), 0, 0);
-    }
-
-    @Override
-    protected void onStart() {
-        super.onStart();
-        BackgroundService.addGuiInUseCounter(this);
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-        BackgroundService.removeGuiInUseCounter(this);
     }
 
 }

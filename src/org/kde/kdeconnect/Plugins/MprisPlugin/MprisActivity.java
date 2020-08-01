@@ -20,39 +20,50 @@
 
 package org.kde.kdeconnect.Plugins.MprisPlugin;
 
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.preference.PreferenceManager;
+import android.text.TextUtils;
 import android.view.KeyEvent;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.drawable.DrawableCompat;
+import androidx.fragment.app.FragmentManager;
+
+import org.apache.commons.lang3.ArrayUtils;
 import org.kde.kdeconnect.Backends.BaseLink;
 import org.kde.kdeconnect.Backends.BaseLinkProvider;
 import org.kde.kdeconnect.BackgroundService;
+import org.kde.kdeconnect.Helpers.VideoUrlsHelper;
 import org.kde.kdeconnect.NetworkPacket;
 import org.kde.kdeconnect.Plugins.SystemvolumePlugin.SystemvolumeFragment;
 import org.kde.kdeconnect.UserInterface.ThemeUtil;
 import org.kde.kdeconnect_tp.R;
 
+import java.net.MalformedURLException;
 import java.util.List;
 
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.graphics.drawable.DrawableCompat;
-import androidx.fragment.app.FragmentManager;
 import butterknife.BindView;
 import butterknife.ButterKnife;
 
@@ -135,7 +146,7 @@ public class MprisActivity extends AppCompatActivity {
         BackgroundService.RunWithPlugin(this, deviceId, MprisPlugin.class, mpris -> {
             targetPlayer = mpris.getPlayerStatus(targetPlayerName);
 
-            addSytemvolumeFragment();
+            addSystemVolumeFragment();
 
             mpris.setPlayerStatusUpdatedHandler("activity", new Handler() {
                 @Override
@@ -150,7 +161,7 @@ public class MprisActivity extends AppCompatActivity {
                     final List<String> playerList = mpris.getPlayerList();
                     final ArrayAdapter<String> adapter = new ArrayAdapter<>(MprisActivity.this,
                             android.R.layout.simple_spinner_item,
-                            playerList.toArray(new String[0])
+                            playerList.toArray(ArrayUtils.EMPTY_STRING_ARRAY)
                     );
 
                     adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -217,7 +228,7 @@ public class MprisActivity extends AppCompatActivity {
         });
     }
 
-    private void addSytemvolumeFragment() {
+    private void addSystemVolumeFragment() {
 
         if (findViewById(R.id.systemvolume_fragment) == null)
             return;
@@ -258,8 +269,10 @@ public class MprisActivity extends AppCompatActivity {
 
         Bitmap albumArt = playerStatus.getAlbumArt();
         if (albumArt == null) {
-            Drawable placeholder_art = DrawableCompat.wrap(getResources().getDrawable(R.drawable.ic_album_art_placeholder));
-            DrawableCompat.setTint(placeholder_art, getResources().getColor(R.color.primary));
+            final Drawable drawable = ContextCompat.getDrawable(this, R.drawable.ic_album_art_placeholder);
+            assert drawable != null;
+            Drawable placeholder_art = DrawableCompat.wrap(drawable);
+            DrawableCompat.setTint(placeholder_art, ContextCompat.getColor(this, R.color.primary));
             albumArtView.setImageDrawable(placeholder_art);
         } else {
             albumArtView.setImageBitmap(albumArt);
@@ -289,6 +302,8 @@ public class MprisActivity extends AppCompatActivity {
         volumeLayout.setVisibility(playerStatus.isSetVolumeAllowed() ? View.VISIBLE : View.GONE);
         rewButton.setVisibility(playerStatus.isSeekAllowed() ? View.VISIBLE : View.GONE);
         ffButton.setVisibility(playerStatus.isSeekAllowed() ? View.VISIBLE : View.GONE);
+
+        invalidateOptionsMenu();
 
         //Show and hide previous/next buttons simultaneously
         if (playerStatus.isGoPreviousAllowed() || playerStatus.isGoNextAllowed()) {
@@ -350,6 +365,17 @@ public class MprisActivity extends AppCompatActivity {
         }
     }
 
+    private interface MprisPlayerCallback {
+        void performAction(MprisPlugin.MprisPlayer player);
+    }
+
+    private void performActionOnClick(View v, MprisPlayerCallback l) {
+        v.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
+            if (targetPlayer == null) return;
+            l.performAction(targetPlayer);
+        }));
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -357,8 +383,15 @@ public class MprisActivity extends AppCompatActivity {
         setContentView(R.layout.activity_mpris);
         ButterKnife.bind(this);
 
-        final String targetPlayerName = getIntent().getStringExtra("player");
+        String targetPlayerName = getIntent().getStringExtra("player");
         getIntent().removeExtra("player");
+
+        if (TextUtils.isEmpty(targetPlayerName)) {
+            if (savedInstanceState != null) {
+                targetPlayerName = savedInstanceState.getString("targetPlayer");
+            }
+        }
+
         deviceId = getIntent().getStringExtra("deviceId");
 
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
@@ -369,35 +402,17 @@ public class MprisActivity extends AppCompatActivity {
         BackgroundService.RunCommand(MprisActivity.this, service -> service.addConnectionListener(connectionReceiver));
         connectToPlugin(targetPlayerName);
 
-        playButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.playPause();
-        }));
+        performActionOnClick(playButton, MprisPlugin.MprisPlayer::playPause);
 
-        prevButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.previous();
-        }));
+        performActionOnClick(prevButton, MprisPlugin.MprisPlayer::previous);
 
-        rewButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.seek(interval_time * -1);
-        }));
+        performActionOnClick(rewButton, p -> targetPlayer.seek(interval_time * -1));
 
-        ffButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.seek(interval_time);
-        }));
+        performActionOnClick(ffButton, p -> p.seek(interval_time));
 
-        nextButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.next();
-        }));
+        performActionOnClick(nextButton, MprisPlugin.MprisPlayer::next);
 
-        stopButton.setOnClickListener(view -> BackgroundService.RunCommand(MprisActivity.this, service -> {
-            if (targetPlayer == null) return;
-            targetPlayer.stop();
-        }));
+        performActionOnClick(stopButton, MprisPlugin.MprisPlayer::stop);
 
         volumeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -453,16 +468,39 @@ public class MprisActivity extends AppCompatActivity {
         nowPlayingText.setSelected(true);
     }
 
-    @Override
-    protected void onStart() {
-        super.onStart();
-        BackgroundService.addGuiInUseCounter(this);
+
+    final static int MENU_OPEN_URL = Menu.FIRST;
+
+    public boolean onPrepareOptionsMenu(Menu menu) {
+        menu.clear();
+        if(targetPlayer != null && !"".equals(targetPlayer.getUrl())) {
+            menu.add(0, MENU_OPEN_URL, Menu.NONE, R.string.mpris_open_url);
+        }
+        return super.onPrepareOptionsMenu(menu);
     }
 
     @Override
-    protected void onStop() {
-        super.onStop();
-        BackgroundService.removeGuiInUseCounter(this);
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (targetPlayer != null && item.getItemId() == MENU_OPEN_URL) {
+            try {
+                String url = VideoUrlsHelper.formatUriWithSeek(targetPlayer.getUrl(), targetPlayer.getPosition()).toString();
+                Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                startActivity(browserIntent);
+                targetPlayer.pause();
+                return true;
+            } catch (MalformedURLException | ActivityNotFoundException e) {
+                e.printStackTrace();
+                Toast.makeText(getApplicationContext(), getString(R.string.cant_open_url), Toast.LENGTH_LONG).show();
+            }
+        }
+        return super.onOptionsItemSelected(item);
     }
 
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        if (targetPlayer != null) {
+            outState.putString("targetPlayer", targetPlayer.getPlayer());
+        }
+        super.onSaveInstanceState(outState);
+    }
 }

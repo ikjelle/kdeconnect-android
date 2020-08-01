@@ -5,27 +5,24 @@ import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
 
-import org.kde.kdeconnect.BackgroundService;
-
-import java.io.File;
-import java.io.IOException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 
+import org.kde.kdeconnect.BackgroundService;
+
+import java.io.File;
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
 public class PhotoActivity extends AppCompatActivity {
 
     private Uri photoURI;
-    private PhotoPlugin plugin;
 
     @Override
     protected void onStart() {
         super.onStart();
-
-        BackgroundService.RunWithPlugin(this, getIntent().getStringExtra("deviceId"), PhotoPlugin.class, plugin -> this.plugin = plugin);
 
         Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
@@ -48,7 +45,7 @@ public class PhotoActivity extends AppCompatActivity {
 
     private File createImageFile() throws IOException {
         // Create an image file name
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String timeStamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(LocalDateTime.now());
         String imageFileName = "JPEG_" + timeStamp + "_";
         File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
         return File.createTempFile(
@@ -61,10 +58,13 @@ public class PhotoActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-
-        if (resultCode == -1) {
-            plugin.sendPhoto(photoURI);
-        }
+        BackgroundService.RunWithPlugin(this, getIntent().getStringExtra("deviceId"), PhotoPlugin.class, plugin -> {
+            if (resultCode == -1) {
+                plugin.sendPhoto(photoURI);
+            } else {
+                plugin.sendCancel();
+            }
+        });
         finish();
     }
 }

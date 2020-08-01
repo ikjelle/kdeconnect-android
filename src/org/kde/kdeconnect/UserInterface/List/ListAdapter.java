@@ -26,28 +26,27 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 
-import java.util.ArrayList;
+import androidx.annotation.NonNull;
+
+import java.util.List;
 
 public class ListAdapter extends ArrayAdapter<ListAdapter.Item> {
-
     public interface Item {
-        View inflateView(LayoutInflater layoutInflater);
+        @NonNull
+        View inflateView(@NonNull LayoutInflater layoutInflater);
     }
 
-    private final ArrayList<Item> items;
-    private final LayoutInflater layoutInflater;
+    private final List<? extends Item> items;
 
-    public ListAdapter(Context context, ArrayList<Item> items) {
-        super(context, 0, items);
+    public ListAdapter(Context context, List<? extends Item> items) {
+        super(context, 0, (List<Item>) items);
         this.items = items;
-        layoutInflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
     }
 
-
+    @NonNull
     @Override
-    public View getView(int position, View convertView, ViewGroup parent) {
+    public View getView(int position, View convertView, @NonNull ViewGroup parent) {
         final Item i = items.get(position);
-        return i.inflateView(layoutInflater);
+        return i.inflateView(LayoutInflater.from(parent.getContext()));
     }
-
 }
